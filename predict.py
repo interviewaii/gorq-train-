@@ -57,7 +57,7 @@ LOG_FILE = "training_data.csv"
 # Lock for CSV operations to prevent race conditions between predicting and logging outcomes
 csv_lock = threading.Lock()
 
-def log_prediction_data(prompt_text, ai_reply, math_dir="", indicators=None):
+def log_prediction_data(prompt_text, ai_reply, math_dir="", timeframe="3m", indicators=None):
     """Logs prediction with ALL indicators for Kaggle training CSV."""
     try:
         symbol = re.search(r'ASSET: ([\w/-]+)', prompt_text)
@@ -67,6 +67,7 @@ def log_prediction_data(prompt_text, ai_reply, math_dir="", indicators=None):
         pred_dir = "UP" if "DIRECTION: UP" in ai_reply.upper() else "DOWN"
         row = {
             "timestamp": datetime.now().isoformat(),
+            "timeframe": timeframe,
             "symbol": sym_str,
             "model_type": "AI-Cascade",
             "predicted_dir": pred_dir,
@@ -796,7 +797,8 @@ def auto_label_outcomes():
                     fieldnames = reader.fieldnames
                     rows = list(reader)
 
-                pending_symbols = set()
+                pending_symbols_1m = set()
+                pending_symbols_3m = set()
                 for row in rows:
                     if not str(row.get("actual_dir", "")).strip() and row.get("symbol", ""):
                         # Convert symbol to KuCoin format: BTC/USDT -> BTC-USDT
@@ -805,14 +807,23 @@ def auto_label_outcomes():
                         if not kc_sym.endswith('-USDT'):
                             kc_sym = re.sub(r'[^A-Z0-9]', '', raw_sym.upper())
                             kc_sym = kc_sym.replace('USDT', '-USDT')
-                        pending_symbols.add(kc_sym)
+                        
+                        tf = str(row.get("timeframe", "3m")).strip().lower()
+                        if tf == "1m":
+                            pending_symbols_1m.add(kc_sym)
+                        else:
+                            pending_symbols_3m.add(kc_sym)
 
-                if not pending_symbols:
+                if not pending_symbols_1m and not pending_symbols_3m:
                     continue
 
-                actuals_cache = {}
-                for sym in pending_symbols:
-                    actuals_cache[sym] = fetch_recent_candles(sym, "3min", 50)
+                actuals_cache_1m = {}
+                for sym in pending_symbols_1m:
+                    actuals_cache_1m[sym] = fetch_recent_candles(sym, "1min", 50)
+                    
+                actuals_cache_3m = {}
+                for sym in pending_symbols_3m:
+                    actuals_cache_3m[sym] = fetch_recent_candles(sym, "3min", 50)
 
                 labeled = 0
                 for row in rows:
@@ -823,13 +834,18 @@ def auto_label_outcomes():
                             kc_sym = re.sub(r'[^A-Z0-9]', '', raw_sym.upper())
                             kc_sym = kc_sym.replace('USDT', '-USDT')
                         
-                        if kc_sym not in actuals_cache:
-                            continue
+                        tf = str(row.get("timeframe", "3m")).strip().lower()
+                        
+                        if tf == "1m":
+                            if kc_sym not in actuals_cache_1m: continue
+                            kucoin_candles = actuals_cache_1m[kc_sym]
+                        else:
+                            if kc_sym not in actuals_cache_3m: continue
+                            kucoin_candles = actuals_cache_3m[kc_sym]
                         
                         try:
                             dt = datetime.fromisoformat(row["timestamp"])
                             pred_time_s = int(dt.timestamp())
-                            kucoin_candles = actuals_cache[kc_sym]
                             
                             # Find the FIRST closed candle that started AFTER prediction
                             # This is the N+1 candle the AI was predicting
@@ -890,17 +906,17 @@ def start_loading():
     except Exception as e:
         print(f"[Boot] CSV load error: {e}")
     
-    # Validate CSV has correct columns (new 25+ format)
+    # Validate CSV has correct columns (new 25+ format with timeframe)
     try:
         if os.path.isfile(LOG_FILE):
             with open(LOG_FILE, 'r') as f:
                 reader = csv.DictReader(f)
                 headers = reader.fieldnames or []
-            if "fib_236" not in headers or "bb_upper" not in headers:
+            if "fib_236" not in headers or "timeframe" not in headers:
                 # Old format CSV - back it up and start fresh
                 backup = LOG_FILE.replace(".csv", "_old.csv")
                 os.rename(LOG_FILE, backup)
-                print(f"[Boot] Old CSV backed up to {backup}, starting fresh with 25+ columns")
+                print(f"[Boot] Old CSV backed up to {backup}, starting fresh with 26+ columns including timeframe")
                 PRED_COUNTER["total"] = 0
                 PRED_COUNTER["wins"] = 0
                 PRED_COUNTER["losses"] = 0
@@ -909,8 +925,9 @@ def start_loading():
     
     # Start auto-labeler AFTER model loads
     threading.Thread(target=auto_label_outcomes, daemon=True).start()
-    # Start autonomous trading predictor loop
-    threading.Thread(target=auto_predict_loop, daemon=True).start()
+    # Start autonomous trading predictor loops (1m and 3m)
+    threading.Thread(target=auto_predict_loop_for_timeframe, args=(3,), daemon=True).start()
+    threading.Thread(target=auto_predict_loop_for_timeframe, args=(1,), daemon=True).start()
 
 
 def perform_single_prediction(symbol):
@@ -969,10 +986,11 @@ def calc_adx(candles, period=14):
     dx = 100 * abs(pdi - ndi) / (pdi + ndi) if (pdi + ndi) else 0
     return round(dx * 0.7 + 25 * 0.3, 2), round(pdi, 2), round(ndi, 2)
 
-def run_prediction_cycle(symbol, SYMBOL_DISPLAY):
+def run_prediction_cycle(symbol, SYMBOL_DISPLAY, timeframe="3m"):
     """The master prediction controller for both auto and manual UI."""
     try:
-        url = f"https://api.kucoin.com/api/v1/market/candles?symbol={symbol}&type=3min"
+        kucoin_tf = "1min" if timeframe == "1m" else "3min"
+        url = f"https://api.kucoin.com/api/v1/market/candles?symbol={symbol}&type={kucoin_tf}"
         import urllib.request, json
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -1030,7 +1048,7 @@ def run_prediction_cycle(symbol, SYMBOL_DISPLAY):
         history_str = "\n".join([f"C{i}: O:{c['open']} H:{c['high']} L:{c['low']} C:{c['close']}" for i, c in enumerate(candles[-20:])])
         sym_display = SYMBOL_DISPLAY.get(symbol, symbol)
         
-        prompt = f"""ASSET: {sym_display} | Timeframe: 3m
+        prompt = f"""ASSET: {sym_display} | Timeframe: {timeframe}
 HISTORY (Last 20 Candles):
 {history_str}
 
@@ -1150,7 +1168,7 @@ PROBABILITY: Bullish X%, Bearish Y%"""
             "candle_body_pct": candle_body_pct, "price_close": current['close']
         }
         with csv_lock:
-            log_prediction_data(prompt, reply, math_dir=math_dir, indicators=ind_dict)
+            log_prediction_data(prompt, reply, math_dir=math_dir, timeframe=timeframe, indicators=ind_dict)
 
         # Extract confidence from reply
         import re as re2
@@ -1182,27 +1200,31 @@ async def manual_predict(req: ManualPredictReq):
     threading.Thread(target=run_prediction_cycle, args=(req.symbol, SYMBOL_DISPLAY), daemon=True).start()
     return {"status": "success", "message": f"Prediction started for {req.symbol}"}
 
-def auto_predict_loop():
+def auto_predict_loop_for_timeframe(interval_mins):
     import time
     SYMBOL_DISPLAY = {"BTC-USDT": "BTC/USDT", "ETH-USDT": "ETH/USDT", "SOL-USDT": "SOL/USDT", "EUR-USDT": "EUR/USDT", "GBP-USDT": "GBP/USDT", "AUD-USDT": "AUD/USDT", "JPY-USDT": "JPY/USDT"}
     
-    print("[AutoPredict] BTC-USDT only mode for clean CSV training")
+    interval_s = interval_mins * 60
+    tf_str = f"{interval_mins}m"
+    print(f"[AutoPredict] {tf_str} loop started for BTC-USDT only")
+    
     while True:
         try:
             now = time.time()
-            next_3m = (int(now // 180) + 1) * 180
-            wait = (next_3m - 5) - now
-            if wait <= 0: wait += 180
+            next_candle = (int(now // interval_s) + 1) * interval_s
+            wait = (next_candle - 5) - now
+            if wait <= 0: wait += interval_s
             
-            print(f"[AutoPredict] Waiting {int(wait)}s for next BTC candle close...")
+            print(f"[AutoPredict-{tf_str}] Waiting {int(wait)}s for next BTC candle close...")
             time.sleep(wait)
             
             # Only BTC-USDT for clean CSV
-            run_prediction_cycle("BTC-USDT", SYMBOL_DISPLAY)
+            run_prediction_cycle("BTC-USDT", SYMBOL_DISPLAY, timeframe=tf_str)
                 
         except Exception as e:
-            print(f"[Loop Error] {e}")
+            print(f"[Loop Error] {tf_str}: {e}")
             time.sleep(10)
+
 
 
 
