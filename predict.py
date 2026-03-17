@@ -646,22 +646,24 @@ def auto_predict_loop():
     import urllib.request
     import json
 
-    SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+    SYMBOLS = ["bitcoin", "ethereum", "solana"]  # CoinGecko IDs
+    SYMBOL_DISPLAY = {"bitcoin": "BTC/USDT", "ethereum": "ETH/USDT", "solana": "SOL/USDT"}
     INTERVAL = "3m"
     CANDLE_COUNT = 50
 
-    def fetch_candles(symbol):
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={INTERVAL}&limit={CANDLE_COUNT}"
+    def fetch_candles(coin_id):
+        """Fetch OHLCV candles from CoinGecko (no geo-block on US servers)."""
+        # CoinGecko /ohlc endpoint returns: [time, open, high, low, close]
+        url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc?vs_currency=usd&days=1"
         try:
-            with urllib.request.urlopen(url, timeout=10) as resp:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read())
-            return [{
-                "open": float(k[1]), "high": float(k[2]),
-                "low": float(k[3]),  "close": float(k[4]),
-                "volume": float(k[5])
-            } for k in data]
+            if not data:
+                return []
+            return [{"open": float(k[1]), "high": float(k[2]), "low": float(k[3]), "close": float(k[4])} for k in data]
         except Exception as e:
-            print(f"[AutoPredict] Binance fetch error for {symbol}: {e}")
+            print(f"[AutoPredict] CoinGecko fetch error for {coin_id}: {e}")
             return []
 
     def calc_rsi(closes, period=14):
@@ -738,7 +740,8 @@ def auto_predict_loop():
 
                 math_dir = "UP" if trend_score > 0 else "DOWN"
                 price = current['close']
-                sym_display = symbol.replace("USDT", "/USDT")
+                sym_display = SYMBOL_DISPLAY.get(symbol, symbol.upper())
+                sym_short = sym_display.replace("/USDT", "")  # e.g. BTC, ETH, SOL
 
                 prompt = f"""{sym_display} | Interval: {INTERVAL}
 Price:{price} | Last Close: {prev['close']} | Trend Score: {trend_score}
