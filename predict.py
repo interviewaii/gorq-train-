@@ -315,7 +315,7 @@ function switchAsset(sym) {
   document.querySelectorAll('.asset-btn').forEach(b => {
     b.classList.toggle('active', b.textContent.includes(sym.split('-')[0]));
   });
-  document.getElementById('chart-title').innerText = '\u{1F4CA} LIVE ' + activeTF.toUpperCase() + ' CHART: ' + sym;
+  document.getElementById('chart-title').innerText = '[CHART] LIVE ' + activeTF.toUpperCase() + ' CHART: ' + sym;
   document.getElementById('btn-sym').innerText = sym;
   loadData();
 }
@@ -326,7 +326,7 @@ function switchTF(tf) {
     const label = tf.replace('min','M');
     b.classList.toggle('active', b.textContent.trim().includes(label) || b.textContent.trim() === label);
   });
-  document.getElementById('chart-title').innerText = '\u{1F4CA} LIVE ' + tf.toUpperCase() + ' CHART: ' + activeSymbol;
+  document.getElementById('chart-title').innerText = '[CHART] LIVE ' + tf.toUpperCase() + ' CHART: ' + activeSymbol;
   loadData();
 }
 
