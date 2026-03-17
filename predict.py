@@ -210,6 +210,9 @@ async def root():
   <div class="status-pill"><span class="dot"></span> Groq AI Connected</div>
   <div class="status-pill"><span class="dot"></span> Supabase Live</div>
   <div class="status-pill"><span class="dot"></span> Auto-Trading Every 3 Minutes</div>
+  <div class="status-pill" style="background:rgba(168,85,247,0.15);border-color:rgba(168,85,247,0.3);color:#d8b4fe">
+    🕒 UI Last Update: <span id="last-update" style="margin-left:4px">--:--:--</span>
+  </div>
 </div>
 
 <div class="stats" id="stats">
@@ -263,8 +266,9 @@ async function loadPredictions() {
       const actClass = p.actual_dir === 'UP' ? 'badge-up' : p.actual_dir === 'DOWN' ? 'badge-down' : 'badge-pending';
       const resClass = p.correct === 'TRUE' ? 'badge-correct' : p.correct === 'FALSE' ? 'badge-wrong' : 'badge-pending';
       const res = p.correct === 'TRUE' ? '✅ WIN' : p.correct === 'FALSE' ? '❌ LOSS' : '⏳ Pending';
-      return \`<tr><td style="color:#475569;\${p.correct?'':''}">\${t}</td><td style="font-weight:700">\${p.symbol}</td><td><span class="badge \${dirClass}">\${p.predicted_dir || '--'}</span></td><td><span class="badge \${actClass}">\${p.actual_dir || '--'}</span></td><td><span class="badge \${resClass}">\${res}</span></td></tr>\`;
+      return `<tr><td style="color:#475569;">${t}</td><td style="font-weight:700">${p.symbol}</td><td><span class="badge ${dirClass}">${p.predicted_dir || '--'}</span></td><td><span class="badge ${actClass}">${p.actual_dir || '--'}</span></td><td><span class="badge ${resClass}">${res}</span></td></tr>`;
     }).join('');
+    document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
   } catch(e) {
     document.getElementById('table-body').innerHTML = '<tr><td colspan="5" style="text-align:center;color:#ef4444;padding:16px">Error loading data from API</td></tr>';
   }
@@ -283,7 +287,7 @@ async function loadPrices() {
       const price = d[coins[i]]?.usd;
       if (!price) continue;
       const p = parseFloat(price).toLocaleString('en-US',{style:'currency',currency:'USD',minimumFractionDigits:2});
-      cards[i].innerHTML = \`<h3>\${labels[i]}</h3><div class="symbol-name" style="color:\${colors[i]}">\${names[i]}</div><p class="price">\${p}</p><p style="font-size:0.7rem;color:#475569;margin-top:4px">Live from CoinGecko</p>\`;
+      cards[i].innerHTML = `<h3>${labels[i]}</h3><div class="symbol-name" style="color:${colors[i]}">${names[i]}</div><p class="price">${p}</p><p style="font-size:0.7rem;color:#475569;margin-top:4px">Live from CoinGecko</p>`;
     }
   } catch(e) {
     console.log('Price fetch error:', e);
