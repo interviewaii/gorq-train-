@@ -281,7 +281,7 @@ async function loadPrices() {
   const labels = ['BTC/USDT','ETH/USDT','SOL/USDT'];
   const cards = document.getElementById('live-cards').children;
   try {
-    const r = await fetch(\`https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd\`);
+    const r = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd`);
     const d = await r.json();
     for (let i = 0; i < coins.length; i++) {
       const price = d[coins[i]]?.usd;
