@@ -469,6 +469,178 @@ def start_loading():
     load_model()
     # Start auto-labeler AFTER model loads (so we know the server is healthy)
     threading.Thread(target=auto_label_outcomes, daemon=True).start()
+    # Start autonomous trading predictor loop
+    threading.Thread(target=auto_predict_loop, daemon=True).start()
+
+
+def auto_predict_loop():
+    """
+    🤖 AUTONOMOUS CLOUD TRADER
+    Every 3 minutes, this function:
+    1. Fetches the latest candle data from Binance for BTC, ETH, and SOL.
+    2. Calculates all technical indicators (RSI, MACD, EMA, ADX, etc.)
+    3. Builds a prompt and sends it to Groq (Llama 3 70B) for a prediction.
+    4. Saves the result permanently to Supabase.
+    No browser, no React, no Mac needed. Fully autonomous.
+    """
+    import time
+    import urllib.request
+    import json
+
+    SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+    INTERVAL = "3m"
+    CANDLE_COUNT = 50
+
+    def fetch_candles(symbol):
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={INTERVAL}&limit={CANDLE_COUNT}"
+        try:
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                data = json.loads(resp.read())
+            return [{
+                "open": float(k[1]), "high": float(k[2]),
+                "low": float(k[3]),  "close": float(k[4]),
+                "volume": float(k[5])
+            } for k in data]
+        except Exception as e:
+            print(f"[AutoPredict] Binance fetch error for {symbol}: {e}")
+            return []
+
+    def calc_rsi(closes, period=14):
+        deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+        gains = [max(d, 0) for d in deltas[-period:]]
+        losses = [max(-d, 0) for d in deltas[-period:]]
+        ag = sum(gains) / period if period else 0
+        al = sum(losses) / period if period else 0
+        rs = ag / al if al != 0 else 100
+        return round(100 - (100 / (1 + rs)), 2)
+
+    def calc_ema(closes, period):
+        if len(closes) < period:
+            return closes[-1]
+        k = 2 / (period + 1)
+        ema = sum(closes[:period]) / period
+        for c in closes[period:]:
+            ema = c * k + ema * (1 - k)
+        return round(ema, 6)
+
+    def calc_macd(closes):
+        ema12 = calc_ema(closes, 12)
+        ema26 = calc_ema(closes, 26)
+        macd_line = round(ema12 - ema26, 6)
+        # Signal = 9-period EMA of MACD
+        macd_series = []
+        for i in range(9, len(closes)):
+            e12 = calc_ema(closes[:i], 12)
+            e26 = calc_ema(closes[:i], 26)
+            macd_series.append(e12 - e26)
+        signal = calc_ema(macd_series, 9) if len(macd_series) >= 9 else macd_line
+        return macd_line, round(signal, 6), round(macd_line - signal, 6)
+
+    def calc_adx(candles, period=14):
+        if len(candles) < period + 1:
+            return 25.0, 25.0, 25.0
+        tr_list, pdm_list, ndm_list = [], [], []
+        for i in range(1, len(candles)):
+            h, l, pc = candles[i]['high'], candles[i]['low'], candles[i-1]['close']
+            tr_list.append(max(h - l, abs(h - pc), abs(l - pc)))
+            pdm_list.append(max(candles[i]['high'] - candles[i-1]['high'], 0))
+            ndm_list.append(max(candles[i-1]['low'] - candles[i]['low'], 0))
+        atr = sum(tr_list[-period:]) / period
+        pdi = 100 * (sum(pdm_list[-period:]) / period) / atr if atr else 0
+        ndi = 100 * (sum(ndm_list[-period:]) / period) / atr if atr else 0
+        dx = 100 * abs(pdi - ndi) / (pdi + ndi) if (pdi + ndi) else 0
+        return round(dx * 0.7 + 25 * 0.3, 2), round(pdi, 2), round(ndi, 2)  # smooth
+
+    print("🤖 [AutoPredict] Autonomous Cloud Trader started — predicting every 3 minutes!")
+    time.sleep(15)  # Wait for server to fully warm up
+
+    while True:
+        for symbol in SYMBOLS:
+            try:
+                candles = fetch_candles(symbol)
+                if len(candles) < 30:
+                    continue
+
+                closes = [c['close'] for c in candles]
+                current = candles[-1]
+                prev = candles[-2]
+
+                rsi = calc_rsi(closes)
+                ema8 = calc_ema(closes, 8)
+                ema21 = calc_ema(closes, 21)
+                ema50 = calc_ema(closes, 50)
+                ema200 = calc_ema(closes, 200) if len(closes) >= 200 else calc_ema(closes, len(closes))
+                macd, macd_sig, macd_hist = calc_macd(closes)
+                adx, adx_pos, adx_neg = calc_adx(candles)
+
+                # Trend score (simple EMA stack vote)
+                bulls = sum([ema8 > ema21, ema21 > ema50, ema50 > ema200, rsi > 50, macd > macd_sig])
+                trend_score = round((bulls / 5) * 100 - 50, 2)
+
+                math_dir = "UP" if trend_score > 0 else "DOWN"
+                price = current['close']
+                sym_display = symbol.replace("USDT", "/USDT")
+
+                prompt = f"""{sym_display} | Interval: {INTERVAL}
+Price:{price} | Last Close: {prev['close']} | Trend Score: {trend_score}
+RSI: {rsi} | EMA 8: {ema8} | EMA 21: {ema21} | EMA 50: {ema50} | EMA 200: {ema200}
+MACD: {macd} | MACD Signal: {macd_sig} | MACD Hist: {macd_hist}
+ADX: {adx} | ADX+: {adx_pos} | ADX-: {adx_neg}
+Math Bias: {math_dir}
+Predict the next {INTERVAL} candle. Reply:
+DIRECTION: UP or DOWN
+OPEN: [price]
+HIGH: [price]
+LOW: [price]
+CLOSE: [price]
+STARS: [1-5]
+PROBABILITY: Bullish X%, Bearish Y%"""
+
+                if groq_client is None:
+                    print(f"[AutoPredict] Groq not ready, skipping {symbol}")
+                    continue
+
+                print(f"\n🤖 [AutoPredict] Predicting {symbol} @ {price}...")
+
+                # Call Groq
+                system_prompt = "You are a professional crypto analyst. Be decisive. Reply in the exact format given."
+                chat_completion = groq_client.chat.completions.create(
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt}
+                    ],
+                    model="llama3-70b-8192",
+                    temperature=0.40,
+                    max_tokens=200,
+                )
+                reply = chat_completion.choices[0].message.content.strip()
+                print(f"[AutoPredict] {symbol} → {reply[:60]}...")
+
+                # XGBoost override (if model loaded)
+                try:
+                    if xgb_model is not None:
+                        features = np.array([[price, trend_score, rsi, adx]])
+                        probs = xgb_model.predict_proba(features)[0]
+                        prob_down, prob_up = probs[0], probs[1]
+                        if "DIRECTION: UP" in reply.upper() and prob_down > 0.60:
+                            reply = reply.replace("DIRECTION: UP", "DIRECTION: DOWN")
+                            reply += f"\n[ML Filter: {prob_down*100:.1f}% Bearish]"
+                        elif "DIRECTION: DOWN" in reply.upper() and prob_up > 0.60:
+                            reply = reply.replace("DIRECTION: DOWN", "DIRECTION: UP")
+                            reply += f"\n[ML Filter: {prob_up*100:.1f}% Bullish]"
+                except Exception:
+                    pass
+
+                # Log to Supabase + CSV
+                with csv_lock:
+                    log_prediction_data(prompt, reply, math_dir=math_dir)
+
+            except Exception as e:
+                print(f"[AutoPredict] Error for {symbol}: {e}")
+
+        # Sleep until next 3-minute candle
+        time.sleep(180)
+
 
 
 @app.on_event("startup")
