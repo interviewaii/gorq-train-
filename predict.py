@@ -152,6 +152,10 @@ class PredictRequest(BaseModel):
 # Lock to ensure only one prediction runs at a time (prevents GPU crashes/interference)
 inference_lock = threading.Lock()
 
+@app.get("/")
+async def root():
+    return {"message": "Carl AI Prediction Server is Running 🚀", "status": "online"}
+
 @app.get("/ping")
 async def ping_server():
     """
