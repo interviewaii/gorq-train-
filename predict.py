@@ -654,24 +654,30 @@ def auto_predict_loop():
     import urllib.request
     import json
 
-    SYMBOLS = ["bitcoin", "ethereum", "solana"]  # CoinGecko IDs
-    SYMBOL_DISPLAY = {"bitcoin": "BTC/USDT", "ethereum": "ETH/USDT", "solana": "SOL/USDT"}
+    SYMBOLS = ["BTC-USDT", "ETH-USDT", "SOL-USDT"]  # KuCoin Symbols
+    SYMBOL_DISPLAY = {"BTC-USDT": "BTC/USDT", "ETH-USDT": "ETH/USDT", "SOL-USDT": "SOL/USDT"}
     INTERVAL = "3m"
-    CANDLE_COUNT = 50
 
-    def fetch_candles(coin_id):
-        """Fetch OHLCV candles from CoinGecko (no geo-block on US servers)."""
-        # CoinGecko /ohlc endpoint returns: [time, open, high, low, close]
-        url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc?vs_currency=usd&days=1"
+    def fetch_candles(symbol):
+        """Fetch 3m OHLCV candles from KuCoin (No geo-block on Render)."""
+        # KuCoin K-Line: [time, open, close, high, low, volume, turnover]
+        url = f"https://api.kucoin.com/api/v1/market/candles?symbol={symbol}&type=3min"
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read())
+                raw_data = json.loads(resp.read())
+                data = raw_data.get("data", [])
+            
             if not data:
                 return []
-            return [{"open": float(k[1]), "high": float(k[2]), "low": float(k[3]), "close": float(k[4])} for k in data]
+            
+            # KuCoin returns data in reverse order (newest first). We need chronological.
+            data.reverse()
+            
+            # KuCoin indices: 1=Open, 2=Close, 3=High, 4=Low
+            return [{"open": float(k[1]), "close": float(k[2]), "high": float(k[3]), "low": float(k[4])} for k in data]
         except Exception as e:
-            print(f"[AutoPredict] CoinGecko fetch error for {coin_id}: {e}")
+            print(f"[AutoPredict] KuCoin fetch error for {symbol}: {e}")
             return []
 
     def calc_rsi(closes, period=14):
