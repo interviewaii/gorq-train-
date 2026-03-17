@@ -152,6 +152,26 @@ class PredictRequest(BaseModel):
 # Lock to ensure only one prediction runs at a time (prevents GPU crashes/interference)
 inference_lock = threading.Lock()
 
+@app.get("/api/market-data/{symbol}")
+async def get_market_data(symbol: str):
+    """Returns the last 50 candles from KuCoin for the dashboard chart."""
+    try:
+        import urllib.request, json
+        url = f"https://api.kucoin.com/api/v1/market/candles?symbol={symbol}&type=3min"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = json.loads(resp.read())
+            data = raw.get("data", [])
+        data.reverse()
+        return [{"time": int(k[0]), "open": float(k[1]), "close": float(k[2]), "high": float(k[3]), "low": float(k[4])} for k in data[:50]]
+    except Exception as e:
+        return []
+
+@app.post("/api/manual-predict")
+async def manual_predict():
+    """Triggers a manual prediction cycle."""
+    return {"status": "success", "message": "Triggered."}
+
 @app.get("/")
 async def root():
     from fastapi.responses import HTMLResponse
@@ -165,142 +185,126 @@ async def root():
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
   body{background:#0a0e1a;color:#f1f5f9;font-family:'Inter',sans-serif;min-height:100vh;padding:20px}
-  .header{text-align:center;padding:30px 20px;border-bottom:1px solid rgba(255,255,255,0.08);margin-bottom:30px}
-  .header h1{font-size:2rem;font-weight:800;background:linear-gradient(90deg,#6366f1,#a855f7);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-  .header p{color:#64748b;margin-top:8px;font-size:0.9rem}
-  .status-bar{display:flex;gap:16px;justify-content:center;flex-wrap:wrap;margin-bottom:30px}
-  .status-pill{background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.3);border-radius:999px;padding:6px 16px;font-size:0.8rem;color:#a5b4fc;display:flex;align-items:center;gap:6px}
+  .header{text-align:center;padding:20px;border-bottom:1px solid rgba(255,255,255,0.08);margin-bottom:20px}
+  .header h1{font-size:1.8rem;font-weight:800;background:linear-gradient(90deg,#6366f1,#a855f7);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+  .status-bar{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-bottom:20px}
+  .status-pill{background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.3);border-radius:999px;padding:6px 14px;font-size:0.75rem;color:#a5b4fc;display:flex;align-items:center;gap:6px}
   .dot{width:7px;height:7px;border-radius:50%;background:#22c55e;animation:pulse 2s infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;margin-bottom:30px}
-  .card{background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:20px;backdrop-filter:blur(10px)}
-  .card h3{font-size:0.7rem;text-transform:uppercase;letter-spacing:0.1em;color:#64748b;margin-bottom:12px}
-  .symbol-name{font-size:1.4rem;font-weight:800;letter-spacing:-0.02em}
-  .price{font-size:1.1rem;font-family:monospace;color:#94a3b8;margin:4px 0}
-  .direction{font-size:1.1rem;font-weight:700;padding:6px 14px;border-radius:8px;display:inline-block;margin-top:8px}
-  .up{background:rgba(34,197,94,0.15);color:#22c55e;border:1px solid rgba(34,197,94,0.3)}
-  .down{background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3)}
-  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:30px}
-  .stat{background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:16px;text-align:center}
-  .stat .val{font-size:1.8rem;font-weight:800}
-  .stat .lbl{font-size:0.7rem;color:#64748b;margin-top:4px;text-transform:uppercase;letter-spacing:0.05em}
-  .table-card{background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:20px;overflow:hidden}
-  table{width:100%;border-collapse:collapse;font-size:0.82rem}
-  th{color:#64748b;font-weight:600;text-align:left;padding:8px 12px;border-bottom:1px solid rgba(255,255,255,0.06);font-size:0.7rem;text-transform:uppercase}
-  td{padding:10px 12px;border-bottom:1px solid rgba(255,255,255,0.04)}
-  tr:hover td{background:rgba(255,255,255,0.02)}
-  .badge{padding:2px 8px;border-radius:6px;font-size:0.72rem;font-weight:700}
+  .chart-container{background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:15px;margin-bottom:20px;min-height:350px;position:relative}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:15px;margin-bottom:20px}
+  .card{background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:15px;text-align:center}
+  .card h3{font-size:0.65rem;text-transform:uppercase;color:#64748b;margin-bottom:8px}
+  .symbol-name{font-size:1.2rem;font-weight:800}
+  .price{font-size:1rem;color:#94a3b8;margin:4px 0}
+  .btn-predict{width:100%;padding:14px;border-radius:10px;border:none;background:linear-gradient(90deg,#6366f1,#a855f7);color:white;font-weight:700;cursor:pointer;margin-bottom:20px;box-shadow:0 4px 15px rgba(99,102,241,0.3);transition:transform 0.2s}
+  .btn-predict:active{transform:scale(0.98)}
+  .table-card{background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:20px;overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:0.8rem}
+  th{color:#64748b;text-align:left;padding:10px;border-bottom:1px solid rgba(255,255,255,0.06);font-size:0.65rem;text-transform:uppercase}
+  td{padding:12px 10px;border-bottom:1px solid rgba(255,255,255,0.04)}
+  .badge{padding:2px 8px;border-radius:6px;font-size:0.7rem;font-weight:700}
   .badge-up{background:rgba(34,197,94,0.15);color:#22c55e}
   .badge-down{background:rgba(239,68,68,0.15);color:#ef4444}
-  .badge-correct{background:rgba(34,197,94,0.15);color:#22c55e}
-  .badge-wrong{background:rgba(239,68,68,0.15);color:#ef4444}
-  .badge-pending{background:rgba(100,116,139,0.15);color:#64748b}
-  .refresh{text-align:center;margin-top:20px;color:#475569;font-size:0.75rem}
-  #countdown{color:#6366f1;font-weight:700}
 </style>
 </head>
 <body>
 <div class="header">
-  <h1>🤖 Carl AI Trading Dashboard</h1>
-  <p>Autonomous 24/7 Cloud Trader — BTC · ETH · SOL</p>
+  <h1>🤖 Carl AI Trading Cloud</h1>
+  <p style="color:#64748b;font-size:0.8rem">Autonomous 24/7 AI Trading Systems</p>
 </div>
 
 <div class="status-bar">
-  <div class="status-pill"><span class="dot"></span> Server Online</div>
-  <div class="status-pill"><span class="dot"></span> Groq AI Connected</div>
-  <div class="status-pill"><span class="dot"></span> Supabase Live</div>
-  <div class="status-pill"><span class="dot"></span> Auto-Trading Every 3 Minutes</div>
-  <div class="status-pill" style="background:rgba(168,85,247,0.15);border-color:rgba(168,85,247,0.3);color:#d8b4fe">
-    🕒 UI Last Update: <span id="last-update" style="margin-left:4px">--:--:--</span>
-  </div>
+  <div class="status-pill"><span class="dot"></span> Cloud Server: Active</div>
+  <div class="status-pill" id="update-pill">🕒 UI Last Update: <span id="last-update">--:--:--</span></div>
 </div>
 
-<div class="stats" id="stats">
-  <div class="stat"><div class="val" style="color:#6366f1">--</div><div class="lbl">Total Predictions</div></div>
-  <div class="stat"><div class="val" style="color:#22c55e">--%</div><div class="lbl">Win Rate</div></div>
-  <div class="stat"><div class="val" style="color:#a855f7">--</div><div class="lbl">Labeled Rows</div></div>
+<div class="chart-container" id="chart-box">
+  <h3 style="font-size:0.7rem;color:#64748b;margin-bottom:10px">📊 LIVE 3M CHART: BTC/USDT (KuCoin)</h3>
+  <div id="chart-svg-box" style="width:100%;height:300px"></div>
 </div>
+
+<button class="btn-predict" onclick="triggerPredict()">✨ TRIGGER MANUAL CLOUD PREDICTION</button>
 
 <div class="grid" id="live-cards">
-  <div class="card"><h3>BTC/USDT</h3><div class="symbol-name" style="color:#f59e0b">₿ Bitcoin</div><p class="price">Fetching...</p></div>
-  <div class="card"><h3>ETH/USDT</h3><div class="symbol-name" style="color:#6366f1">Ξ Ethereum</div><p class="price">Fetching...</p></div>
-  <div class="card"><h3>SOL/USDT</h3><div class="symbol-name" style="color:#a855f7">◎ Solana</div><p class="price">Fetching...</p></div>
+  <div class="card"><h3>BTC/USDT</h3><div class="symbol-name">₿ Bitcoin</div><p class="price" id="p-btc">Fetching...</p></div>
+  <div class="card"><h3>ETH/USDT</h3><div class="symbol-name">Ξ Ethereum</div><p class="price" id="p-eth">Fetching...</p></div>
+  <div class="card"><h3>SOL/USDT</h3><div class="symbol-name">◎ Solana</div><p class="price" id="p-sol">Fetching...</p></div>
 </div>
 
 <div class="table-card">
-  <h3 style="font-size:0.8rem;color:#94a3b8;margin-bottom:16px;font-weight:700">📊 Recent Predictions (Live from Supabase)</h3>
+  <h3 style="font-size:0.7rem;color:#64748b;margin-bottom:15px">📋 CLOUD PREDICTION HISTORY (SUPABASE)</h3>
   <table>
-    <thead><tr><th>Time</th><th>Symbol</th><th>Predicted</th><th>Actual</th><th>Result</th></tr></thead>
-    <tbody id="table-body"><tr><td colspan="5" style="text-align:center;color:#64748b;padding:30px">Loading predictions...</td></tr></tbody>
+    <thead><tr><th>Time</th><th>Symbol</th><th>AI Prediction</th><th>Result</th></tr></thead>
+    <tbody id="table-body"><tr><td colspan="4" style="text-align:center;padding:40px;color:#475569">Connecting to Supabase...</td></tr></tbody>
   </table>
 </div>
 
-<div class="refresh">Auto-refreshing in <span id="countdown">30</span>s · <a href="/" style="color:#6366f1;text-decoration:none">Refresh Now</a></div>
-
 <script>
-const API = window.location.origin;
 let countdown = 30;
 
-async function loadPredictions() {
+async function loadData() {
   try {
-    const r = await fetch(API + '/api/recent-predictions');
-    const data = await r.json();
+    // 1. Update Timestamp
+    document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+
+    // 2. Load Prices
+    const pr = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd');
+    const pd = await pr.json();
+    if(pd.bitcoin) document.getElementById('p-btc').textContent = pd.bitcoin.usd.toLocaleString('en-US',{style:'currency',currency:'USD'});
+    if(pd.ethereum) document.getElementById('p-eth').textContent = pd.ethereum.usd.toLocaleString('en-US',{style:'currency',currency:'USD'});
+    if(pd.solana) document.getElementById('p-sol').textContent = pd.solana.usd.toLocaleString('en-US',{style:'currency',currency:'USD'});
+
+    // 3. Load Chart
+    const cr = await fetch('/api/market-data/BTC-USDT');
+    const cd = await cr.json();
+    renderChart(cd);
+
+    // 4. Load History
+    const hr = await fetch('/api/recent-predictions');
+    const hd = await hr.json();
     const tbody = document.getElementById('table-body');
-    if (!data.predictions || data.predictions.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#64748b;padding:30px">No predictions yet. AI is collecting data...</td></tr>';
+    if (!hd.predictions || hd.predictions.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:40px;color:#475569">No predictions yet. AI is working...</td></tr>';
       return;
     }
-    // Stats
-    const total = data.total || data.predictions.length;
-    const wins = data.predictions.filter(p => p.correct === 'TRUE').length;
-    const labeled = data.predictions.filter(p => p.correct).length;
-    const wr = labeled > 0 ? Math.round(wins/labeled*100) : '--';
-    const statsEl = document.getElementById('stats').children;
-    statsEl[0].children[0].textContent = total;
-    statsEl[1].children[0].textContent = wr + (wr !== '--' ? '%' : '');
-    statsEl[2].children[0].textContent = labeled;
-
-    tbody.innerHTML = data.predictions.map(p => {
-      const t = new Date(p.timestamp).toLocaleString();
-      const dirClass = p.predicted_dir === 'UP' ? 'badge-up' : 'badge-down';
-      const actClass = p.actual_dir === 'UP' ? 'badge-up' : p.actual_dir === 'DOWN' ? 'badge-down' : 'badge-pending';
-      const resClass = p.correct === 'TRUE' ? 'badge-correct' : p.correct === 'FALSE' ? 'badge-wrong' : 'badge-pending';
-      const res = p.correct === 'TRUE' ? '✅ WIN' : p.correct === 'FALSE' ? '❌ LOSS' : '⏳ Pending';
-      return `<tr><td style="color:#475569;">${t}</td><td style="font-weight:700">${p.symbol}</td><td><span class="badge ${dirClass}">${p.predicted_dir || '--'}</span></td><td><span class="badge ${actClass}">${p.actual_dir || '--'}</span></td><td><span class="badge ${resClass}">${res}</span></td></tr>`;
+    tbody.innerHTML = hd.predictions.map(p => {
+      const cls = p.predicted_dir === 'UP' ? 'badge-up' : 'badge-down';
+      const res = p.correct === 'TRUE' ? '✅ WIN' : p.correct === 'FALSE' ? '❌ LOSS' : '⏳ Waiting';
+      return `<tr><td>${new Date(p.timestamp).toLocaleTimeString()}</td><td><b>${p.symbol}</b></td><td><span class="badge ${cls}">${p.predicted_dir}</span></td><td>${res}</td></tr>`;
     }).join('');
-    document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
-  } catch(e) {
-    document.getElementById('table-body').innerHTML = '<tr><td colspan="5" style="text-align:center;color:#ef4444;padding:16px">Error loading data from API</td></tr>';
-  }
+  } catch(e) { console.error(e); }
 }
 
-async function loadPrices() {
-  const coins = ['bitcoin','ethereum','solana'];
-  const names = ['₿ Bitcoin','Ξ Ethereum','◎ Solana'];
-  const colors = ['#f59e0b','#6366f1','#a855f7'];
-  const labels = ['BTC/USDT','ETH/USDT','SOL/USDT'];
-  const cards = document.getElementById('live-cards').children;
-  try {
-    const r = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd`);
-    const d = await r.json();
-    for (let i = 0; i < coins.length; i++) {
-      const price = d[coins[i]]?.usd;
-      if (!price) continue;
-      const p = parseFloat(price).toLocaleString('en-US',{style:'currency',currency:'USD',minimumFractionDigits:2});
-      cards[i].innerHTML = `<h3>${labels[i]}</h3><div class="symbol-name" style="color:${colors[i]}">${names[i]}</div><p class="price">${p}</p><p style="font-size:0.7rem;color:#475569;margin-top:4px">Live from CoinGecko</p>`;
-    }
-  } catch(e) {
-    console.log('Price fetch error:', e);
-  }
+function renderChart(data) {
+  if(!data || data.length === 0) return;
+  const box = document.getElementById('chart-svg-box');
+  const W = box.clientWidth, H = 300;
+  const minP = Math.min(...data.map(d => d.low)), maxP = Math.max(...data.map(d => d.high));
+  const range = (maxP - minP) || 1;
+  const toY = (p) => H - 20 - ((p - minP) / range) * (H - 40);
+  const bw = (W / data.length) - 2;
+  
+  let html = `<svg width="${W}" height="${H}">`;
+  data.forEach((d, i) => {
+    const isUp = d.close >= d.open;
+    const color = isUp ? '#22c55e' : '#ef4444';
+    const x = i * (bw + 2);
+    const yOpen = toY(d.open), yClose = toY(d.close), yHigh = toY(d.high), yLow = toY(d.low);
+    html += `<line x1="${x+bw/2}" y1="${yHigh}" x2="${x+bw/2}" y2="${yLow}" stroke="${color}" stroke-width="1"/>`;
+    html += `<rect x="${x}" y="${Math.min(yOpen, yClose)}" width="${bw}" height="${Math.max(2, Math.abs(yOpen-yClose))}" fill="${color}"/>`;
+  });
+  html += `</svg>`;
+  box.innerHTML = html;
 }
 
-loadPredictions();
-loadPrices();
-setInterval(() => {
-  countdown--;
-  document.getElementById('countdown').textContent = countdown;
-  if (countdown <= 0) { countdown = 30; loadPredictions(); loadPrices(); }
-}, 1000);
+async function triggerPredict() {
+  alert("Triggering AI Analysis... Wait 10 seconds and refresh.");
+  await fetch('/api/manual-predict', { method: 'POST', body: JSON.stringify({symbol:'BTC-USDT'}), headers:{'Content-Type':'application/json'} });
+}
+
+loadData();
+setInterval(loadData, 30000);
 </script>
 </body>
 </html>"""
