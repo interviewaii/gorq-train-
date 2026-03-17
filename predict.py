@@ -57,46 +57,47 @@ LOG_FILE = "training_data.csv"
 # Lock for CSV operations to prevent race conditions between predicting and logging outcomes
 csv_lock = threading.Lock()
 
-def log_prediction_data(prompt_text, ai_reply, predicted_open="N/A", predicted_close="N/A", math_dir=""):
-    """
-    Parses EVERY technical indicator from the prompt and saves it to the cloud.
-    Matches the Supabase SQL schema exactly.
-    """
+def log_prediction_data(prompt_text, ai_reply, math_dir="", indicators=None):
+    """Logs prediction with ALL indicators for Kaggle training CSV."""
     try:
-        # Extract fields using regex (Now matching "ASSET: Symbol")
         symbol = re.search(r'ASSET: ([\w/-]+)', prompt_text)
         sym_str = symbol.group(1) if symbol else "N/A"
-        print(f"📝 Logging prediction for {sym_str}...")
-
-        # Helper to extract values from the prompt text or reply
-        def find_val(label, text=prompt_text):
-            match = re.search(rf'{label}: ([\d.-/%]+)', text)
-            return match.group(1) if match else None
-
-        # Prepare the exact row matching the SQL schema
+        ind = indicators or {}
+        
         pred_dir = "UP" if "DIRECTION: UP" in ai_reply.upper() else "DOWN"
         row = {
             "timestamp": datetime.now().isoformat(),
             "symbol": sym_str,
-            "model_type": "Groq-Llama3-70B",
+            "model_type": "AI-Cascade",
             "predicted_dir": pred_dir,
             "actual_open": None,
             "actual_close": None,
             "actual_dir": None,
             "correct": None,
             "ai_reply": ai_reply.replace('\n', ' | ').replace('\r', ''),
-            
-            # Indicators
-            "rsi_14": find_val("RSI"),
-            "macd": find_val("MACD"),
-            "macd_signal": find_val("MACD Signal"),
-            "macd_hist": find_val("MACD Hist"),
-            "adx": find_val("ADX"),
-            "ema_8": find_val("EMA 8") or find_val("EMA Stack"),
-            "ema_50": find_val("EMA 50"),
-            "ema_200": find_val("EMA 200"),
-            "atr": find_val("ATR"),
-            "price_close": find_val("Price") or find_val("Current Price")
+            "rsi_14": ind.get("rsi"),
+            "macd": ind.get("macd"),
+            "macd_signal": ind.get("macd_sig"),
+            "macd_hist": ind.get("macd_hist"),
+            "adx": ind.get("adx"),
+            "plus_di": ind.get("pdi"),
+            "minus_di": ind.get("ndi"),
+            "ema_8": ind.get("ema8"),
+            "ema_21": ind.get("ema21"),
+            "ema_50": ind.get("ema50"),
+            "ema_200": ind.get("ema200"),
+            "bb_upper": ind.get("bb_upper"),
+            "bb_lower": ind.get("bb_lower"),
+            "bb_position": ind.get("bb_pos"),
+            "fib_236": ind.get("fib_236"),
+            "fib_382": ind.get("fib_382"),
+            "fib_500": ind.get("fib_500"),
+            "fib_618": ind.get("fib_618"),
+            "trend_score": ind.get("trend_score"),
+            "math_bias": math_dir,
+            "volume": ind.get("volume"),
+            "candle_body_pct": ind.get("candle_body_pct"),
+            "price_close": ind.get("price_close"),
         }
         
         # --- CSV Logging (Fallback Backup) ---
@@ -973,6 +974,24 @@ def run_prediction_cycle(symbol, SYMBOL_DISPLAY):
         bb_lower = round(bb_sma - 2 * bb_std, 6)
         bb_pos = "ABOVE_UPPER" if current['close'] > bb_upper else ("BELOW_LOWER" if current['close'] < bb_lower else "INSIDE")
 
+        # Fibonacci Retracement (from 20-candle high/low)
+        highs_20 = [c['high'] for c in candles[-20:]]
+        lows_20 = [c['low'] for c in candles[-20:]]
+        fib_high = max(highs_20)
+        fib_low = min(lows_20)
+        fib_range = fib_high - fib_low
+        fib_236 = round(fib_high - fib_range * 0.236, 6)
+        fib_382 = round(fib_high - fib_range * 0.382, 6)
+        fib_500 = round(fib_high - fib_range * 0.500, 6)
+        fib_618 = round(fib_high - fib_range * 0.618, 6)
+
+        # Volume (from KuCoin data if available)
+        volume = float(data[-1][5]) if len(data[-1]) > 5 else 0
+        
+        # Candle body percentage
+        candle_range = current['high'] - current['low']
+        candle_body_pct = round(abs(current['close'] - current['open']) / candle_range * 100, 2) if candle_range > 0 else 0
+
         # Trend Score
         bulls = sum([ema8 > ema21, ema21 > ema50, ema50 > ema200, rsi > 50, macd > macd_sig])
         trend_score = round((bulls / 5) * 100 - 50, 2)
@@ -991,6 +1010,8 @@ Price: {current['close']} | Trend Score: {trend_score}
 RSI: {rsi} | EMA Stack: {ema8}/{ema21}/{ema50}/{ema200}
 MACD: {macd}(Sig:{macd_sig}) | ADX: {adx} (D+:{pdi}/D-:{ndi})
 Bollinger: Upper:{bb_upper} Lower:{bb_lower} Position:{bb_pos}
+Fibonacci: 23.6%={fib_236} 38.2%={fib_382} 50%={fib_500} 61.8%={fib_618}
+Volume: {volume} | Candle Body: {candle_body_pct}%
 Math Bias: {math_dir}
 
 PREDICT next candle:
@@ -1088,9 +1109,18 @@ PROBABILITY: Bullish X%, Bearish Y%"""
         
         pred_dir = "UP" if "DIRECTION: UP" in reply.upper() else "DOWN"
         
-        # Log Result to Supabase + CSV
+        # Log Result to Supabase + CSV with ALL indicators
+        ind_dict = {
+            "rsi": rsi, "macd": macd, "macd_sig": macd_sig, "macd_hist": macd_hist,
+            "adx": adx, "pdi": pdi, "ndi": ndi,
+            "ema8": ema8, "ema21": ema21, "ema50": ema50, "ema200": ema200,
+            "bb_upper": bb_upper, "bb_lower": bb_lower, "bb_pos": bb_pos,
+            "fib_236": fib_236, "fib_382": fib_382, "fib_500": fib_500, "fib_618": fib_618,
+            "trend_score": trend_score, "volume": volume,
+            "candle_body_pct": candle_body_pct, "price_close": current['close']
+        }
         with csv_lock:
-            log_prediction_data(prompt, reply, math_dir=math_dir)
+            log_prediction_data(prompt, reply, math_dir=math_dir, indicators=ind_dict)
 
         # Extract confidence from reply
         import re as re2
