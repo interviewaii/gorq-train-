@@ -343,7 +343,7 @@ async def predict_candle(req: PredictRequest):
                         "content": user_msg,
                     }
                 ],
-                model="llama3-70b-8192",
+                model="llama-3.3-70b-versatile",
                 temperature=0.40,
                 max_tokens=200,
             )
@@ -785,7 +785,7 @@ PROBABILITY: Bullish X%, Bearish Y%"""
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": prompt}
                     ],
-                    model="llama3-70b-8192",
+                    model="llama-3.3-70b-versatile",
                     temperature=0.40,
                     max_tokens=200,
                 )
