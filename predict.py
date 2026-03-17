@@ -266,7 +266,6 @@ function switchAsset(sym) {
   });
   document.getElementById('chart-title').innerText = `📊 LIVE 3M CHART: ${sym} (KuCoin)`;
   document.getElementById('btn-sym').innerText = sym;
-  document.getElementById('hist-sym').innerText = sym.split('-')[0];
   loadData();
 }
 
@@ -278,6 +277,7 @@ async function loadData() {
     const hr = await fetch(`/api/recent-predictions?symbol=${activeSymbol}`);
     const hd = await hr.json();
     const latestPred = (hd.predictions && hd.predictions.length > 0) ? hd.predictions[0] : null;
+    const tbody = document.getElementById('table-body');
     
     if (!hd.predictions || hd.predictions.length === 0) {
       tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:30px;color:#475569">Waiting for next candle close (5s sync)...</td></tr>';
