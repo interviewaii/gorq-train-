@@ -147,6 +147,18 @@ inference_lock = threading.Lock()
 # In-memory cache: last prediction per symbol (survives Supabase outage)
 LAST_PREDICTIONS = {}
 
+# In-memory prediction counter (resets on restart but works immediately)
+PRED_COUNTER = {"total": 0, "wins": 0, "losses": 0}
+
+@app.get("/api/pred-stats")
+async def get_pred_stats():
+    """Returns in-memory prediction stats."""
+    t = PRED_COUNTER["total"]
+    w = PRED_COUNTER["wins"]
+    l = PRED_COUNTER["losses"]
+    pct = round((w / t) * 100, 1) if t > 0 else 0
+    return {"total": t, "wins": w, "losses": l, "win_rate": pct}
+
 @app.get("/api/market-data/{symbol}")
 async def get_market_data(symbol: str, tf: str = "3min"):
     """Returns the last 60 candles from KuCoin. tf=1min or 3min"""
@@ -342,17 +354,17 @@ async function loadData() {
       document.getElementById('status-txt').textContent = 'AI: ' + latestPred.predicted_dir + ' \u2022 ' + new Date(latestPred.timestamp).toLocaleTimeString();
     }
     
-    // 2. Load accuracy stats from CSV
+    // 2. Load stats (in-memory counter)
     try {
-      const ar = await fetch('/accuracy-stats');
+      const ar = await fetch('/api/pred-stats');
       const ad = await ar.json();
       document.getElementById('stat-total').textContent = ad.total || 0;
       document.getElementById('stat-wins').textContent = ad.wins || 0;
       document.getElementById('stat-losses').textContent = ad.losses || 0;
-      document.getElementById('stat-pct').textContent = (ad.win_rate ? ad.win_rate.toFixed(1) : '0') + '%';
+      document.getElementById('stat-pct').textContent = (ad.win_rate || 0) + '%';
     } catch(ae) {}
     
-    // 2. Chart with active timeframe
+    // 3. Chart with active timeframe
     const cr = await fetch(`/api/market-data/${activeSymbol}?tf=${activeTF}`);
     const cd = await cr.json();
     renderChart(cd, latestPred);
@@ -429,25 +441,33 @@ function renderChart(data, latestPred) {
     html += `<rect x="${x}" y="${Math.min(toY(d.open), toY(d.close))}" width="${bw}" height="${Math.max(1.5, Math.abs(toY(d.open)-toY(d.close)))}" fill="${color}" rx="1" opacity="0.9"/>`;
   });
   
-  // AI Prediction Dotted Candle
+  // AI Prediction Candles: C+1 = Lite (filled semi-transparent), C+2 = Dotted
   if(latestPred && latestPred.predicted_dir) {
     const isUp = latestPred.predicted_dir === 'UP';
     const color = isUp ? '#22c55e' : '#ef4444';
-    const x = data.length * (bw + 2) + 4;
-    const candleH = Math.max(20, (H - 40) * 0.08);
-    const startY = toY(lastPrice);
-    const endY = isUp ? startY - candleH : startY + candleH;
-    const top = Math.min(startY, endY);
+    const candleH = Math.max(15, (H - 40) * 0.06);
     
-    // Glow background
-    html += `<rect x="${x-2}" y="${top-8}" width="${bw+4}" height="${candleH+16}" fill="${color}" opacity="0.05" rx="4"/>`;
-    // Dotted wicks
-    html += `<line x1="${x+bw/2}" y1="${top-10}" x2="${x+bw/2}" y2="${top}" stroke="${color}" stroke-width="1.5" stroke-dasharray="2,2" opacity="0.8"/>`;
-    html += `<line x1="${x+bw/2}" y1="${top+candleH}" x2="${x+bw/2}" y2="${top+candleH+10}" stroke="${color}" stroke-width="1.5" stroke-dasharray="2,2" opacity="0.8"/>`;
-    // Dotted body
-    html += `<rect x="${x}" y="${top}" width="${bw}" height="${candleH}" fill="none" stroke="${color}" stroke-width="2" stroke-dasharray="4,3" rx="2"/>`;
-    // AI label
-    html += `<text x="${x+bw/2}" y="${top-14}" fill="${color}" font-size="9" font-weight="bold" text-anchor="middle">AI ${latestPred.predicted_dir}</text>`;
+    // === C+1: LITE MODE (semi-transparent filled candle) ===
+    const x1 = data.length * (bw + 2) + 2;
+    const start1 = toY(lastPrice);
+    const end1 = isUp ? start1 - candleH : start1 + candleH;
+    const top1 = Math.min(start1, end1);
+    // Lite wick
+    html += `<line x1="${x1+bw/2}" y1="${top1-6}" x2="${x1+bw/2}" y2="${top1+candleH+6}" stroke="${color}" stroke-width="1" opacity="0.4"/>`;    // Lite body (filled, semi-transparent)
+    html += `<rect x="${x1}" y="${top1}" width="${bw}" height="${candleH}" fill="${color}" opacity="0.25" rx="2" stroke="${color}" stroke-width="1" stroke-opacity="0.5"/>`;    // Label
+    html += `<text x="${x1+bw/2}" y="${top1-10}" fill="${color}" font-size="7" font-weight="bold" text-anchor="middle" opacity="0.7">C+1</text>`;
+    
+    // === C+2: DOTTED (outline only, dashed border) ===
+    const x2 = (data.length + 1) * (bw + 2) + 4;
+    const candleH2 = candleH * 1.2;
+    const start2 = end1;
+    const end2 = isUp ? start2 - candleH2 : start2 + candleH2;
+    const top2 = Math.min(start2, end2);
+    // Glow
+    html += `<rect x="${x2-2}" y="${top2-6}" width="${bw+4}" height="${candleH2+12}" fill="${color}" opacity="0.04" rx="4"/>`;    // Dotted wicks
+    html += `<line x1="${x2+bw/2}" y1="${top2-8}" x2="${x2+bw/2}" y2="${top2}" stroke="${color}" stroke-width="1.5" stroke-dasharray="2,2" opacity="0.7"/>`;    html += `<line x1="${x2+bw/2}" y1="${top2+candleH2}" x2="${x2+bw/2}" y2="${top2+candleH2+8}" stroke="${color}" stroke-width="1.5" stroke-dasharray="2,2" opacity="0.7"/>`;    // Dotted body
+    html += `<rect x="${x2}" y="${top2}" width="${bw}" height="${candleH2}" fill="none" stroke="${color}" stroke-width="2" stroke-dasharray="4,3" rx="2"/>`;    // AI label
+    html += `<text x="${x2+bw/2}" y="${top2-10}" fill="${color}" font-size="9" font-weight="bold" text-anchor="middle">AI ${latestPred.predicted_dir}</text>`;
   }
   
   html += `</svg>`;
@@ -976,6 +996,7 @@ PROBABILITY: Bullish X%, Bearish Y%"""
             "ai_reply": reply
         }
         print(f"[Predict] {symbol} = {pred_dir} - STORED in LAST_PREDICTIONS")
+        PRED_COUNTER["total"] += 1
 
     except Exception as e:
         print(f"❌ Error in prediction cycle for {symbol}: {e}")
@@ -1018,6 +1039,15 @@ def auto_predict_loop():
 @app.on_event("startup")
 async def startup_event():
     threading.Thread(target=start_loading, daemon=True).start()
+    # Auto-trigger first prediction 10s after startup so chart always has a dotted candle
+    def boot_predict():
+        import time
+        time.sleep(12)
+        SD = {"BTC-USDT": "BTC/USDT", "ETH-USDT": "ETH/USDT", "SOL-USDT": "SOL/USDT",
+              "EUR-USDT": "EUR/USDT", "GBP-USDT": "GBP/USDT", "AUD-USDT": "AUD/USDT", "JPY-USDT": "JPY/USDT"}
+        print("[Boot] Auto-triggering first prediction for BTC-USDT...")
+        run_prediction_cycle("BTC-USDT", SD)
+    threading.Thread(target=boot_predict, daemon=True).start()
 
 
 if __name__ == "__main__":
