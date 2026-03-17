@@ -84,7 +84,7 @@ def log_prediction_data(prompt_text, ai_reply, predicted_open="N/A", predicted_c
             "actual_close": None,
             "actual_dir": None,
             "correct": None,
-            "ai_reply": ai_reply,
+            "ai_reply": ai_reply.replace('\n', ' | ').replace('\r', ''),
             
             # Indicators
             "rsi_14": find_val("RSI"),
@@ -725,22 +725,25 @@ def auto_label_outcomes():
     import urllib.request
     import json
 
-    def fetch_recent_candles(symbol, interval="3m", limit=30):
-        """Fetch recent candles and return a dict keyed by open_time."""
+    def fetch_recent_candles(symbol, interval="3min", limit=50):
+        """Fetch recent candles from KuCoin and return a dict keyed by open_time."""
         candles = {}
         try:
-            url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-            with urllib.request.urlopen(url, timeout=8) as resp:
-                data = json.loads(resp.read())
+            url = f"https://api.kucoin.com/api/v1/market/candles?symbol={symbol}&type={interval}"
+            req_obj = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req_obj, timeout=10) as resp:
+                raw = json.loads(resp.read())
+                data = raw.get("data", [])
             
-            # Binance format: [Open time, Open, High, Low, Close, Volume, Close time, ...]
-            current_time_ms = time.time() * 1000
+            # KuCoin format: [time, open, close, high, low, volume, turnover]
+            current_time = time.time()
             for k in data:
                 open_time = int(k[0])
-                close_time = int(k[6])
-                # Only use it if the candle is fully closed
-                if current_time_ms > close_time:
-                    candles[open_time] = (float(k[1]), float(k[4])) # open, close
+                candle_duration = 3 * 60  # 3 minutes in seconds
+                close_time = open_time + candle_duration
+                # Only use fully closed candles
+                if current_time > close_time:
+                    candles[open_time] = (float(k[1]), float(k[2]))  # open, close
         except Exception as e:
             print(f"[AutoLabel] Fetch error for {symbol}: {e}")
         return candles
@@ -764,38 +767,48 @@ def auto_label_outcomes():
                 pending_symbols = set()
                 for row in rows:
                     if not str(row.get("actual_dir", "")).strip() and row.get("symbol", ""):
-                        sym = re.sub(r'[^A-Z0-9]', '', str(row["symbol"]).upper())
-                        if "USD" in sym and not sym.startswith("EUR") and not sym.startswith("GBP"):
-                            pending_symbols.add(sym)
+                        # Convert symbol to KuCoin format: BTC/USDT -> BTC-USDT
+                        raw_sym = str(row["symbol"]).strip()
+                        kc_sym = raw_sym.replace('/', '-')
+                        if not kc_sym.endswith('-USDT'):
+                            kc_sym = re.sub(r'[^A-Z0-9]', '', raw_sym.upper())
+                            kc_sym = kc_sym.replace('USDT', '-USDT')
+                        pending_symbols.add(kc_sym)
 
                 if not pending_symbols:
                     continue
 
                 actuals_cache = {}
                 for sym in pending_symbols:
-                    actuals_cache[sym] = fetch_recent_candles(sym, "3m", 50)
+                    actuals_cache[sym] = fetch_recent_candles(sym, "3min", 50)
 
                 labeled = 0
                 for row in rows:
                     sym = re.sub(r'[^A-Z0-9]', '', str(row.get("symbol", "")).upper())
                     
                     # If this row needs labeling and we have data for this symbol
-                    if not str(row.get("actual_dir", "")).strip() and sym in actuals_cache:
+                    if not str(row.get("actual_dir", "")).strip():
+                        # Convert row symbol to KuCoin format
+                        raw_sym = str(row.get("symbol", "")).strip()
+                        kc_sym = raw_sym.replace('/', '-')
+                        if not kc_sym.endswith('-USDT'):
+                            kc_sym = re.sub(r'[^A-Z0-9]', '', raw_sym.upper())
+                            kc_sym = kc_sym.replace('USDT', '-USDT')
+                        
+                    if not str(row.get("actual_dir", "")).strip() and kc_sym in actuals_cache:
                         try:
-                            # Parse CSV timestamp (e.g., "2026-03-14T05:52:08.781707")
                             dt = datetime.fromisoformat(row["timestamp"])
-                            row_time_ms = int(dt.timestamp() * 1000)
+                            row_time_s = int(dt.timestamp())
                             
-                            # Calculate the start time of the 3-minute candle this prediction was attempting to forecast
-                            interval_ms = 3 * 60 * 1000
-                            current_candle_start = (row_time_ms // interval_ms) * interval_ms
-                            target_candle_start = current_candle_start + interval_ms # N+1 Candle
+                            # Calculate the start time of the 3-minute candle
+                            interval_s = 3 * 60
+                            current_candle_start = (row_time_s // interval_s) * interval_s
+                            target_candle_start = current_candle_start + interval_s  # N+1
                             
-                            binance_candles = actuals_cache[sym]
+                            kucoin_candles = actuals_cache[kc_sym]
                             
-                            # If the target candle has closed and exists in our history
-                            if target_candle_start in binance_candles:
-                                a_open, a_close = binance_candles[target_candle_start]
+                            if target_candle_start in kucoin_candles:
+                                a_open, a_close = kucoin_candles[target_candle_start]
                                 actual_dir = "UP" if a_close >= a_open else "DOWN"
                                 pred_dir = str(row.get("predicted_dir", "")).strip().upper()
                                 
