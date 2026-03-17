@@ -148,19 +148,30 @@ inference_lock = threading.Lock()
 LAST_PREDICTIONS = {}
 
 @app.get("/api/market-data/{symbol}")
-async def get_market_data(symbol: str):
-    """Returns the last 50 candles from KuCoin for the dashboard chart."""
+async def get_market_data(symbol: str, tf: str = "3min"):
+    """Returns the last 60 candles from KuCoin. tf=1min or 3min"""
     try:
         import urllib.request, json
-        url = f"https://api.kucoin.com/api/v1/market/candles?symbol={symbol}&type=3min"
+        # Validate timeframe
+        allowed = {"1min", "3min", "5min", "15min"}
+        timeframe = tf if tf in allowed else "3min"
+        url = f"https://api.kucoin.com/api/v1/market/candles?symbol={symbol}&type={timeframe}"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             raw = json.loads(resp.read())
             data = raw.get("data", [])
         data.reverse()
-        return [{"time": int(k[0]), "open": float(k[1]), "close": float(k[2]), "high": float(k[3]), "low": float(k[4])} for k in data[:50]]
+        return [{"time": int(k[0]), "open": float(k[1]), "close": float(k[2]), "high": float(k[3]), "low": float(k[4])} for k in data[-60:]]
     except Exception as e:
         return []
+
+@app.get("/download-csv")
+async def download_csv():
+    """Download the training_data.csv for Kaggle training."""
+    from fastapi.responses import FileResponse
+    if os.path.isfile(LOG_FILE):
+        return FileResponse(LOG_FILE, media_type="text/csv", filename="carl_ai_training_data.csv")
+    return {"error": "No CSV file found yet."}
 
 class ManualPredictReq(BaseModel):
     symbol: str
@@ -198,7 +209,16 @@ async def root():
   .header{text-align:center;padding:15px;border-bottom:1px solid rgba(255,255,255,0.08);margin-bottom:15px}
   .header h1{font-size:1.6rem;font-weight:800;background:linear-gradient(90deg,#6366f1,#a855f7);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
   .status-pill{background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.2);border-radius:999px;padding:5px 12px;font-size:0.7rem;color:#a5b4fc;margin:10px auto;display:table}
-  .dot{width:6px;height:6px;border-radius:50%;background:#22c55e;display:inline-block;margin-right:6px}
+  .dot{width:6px;height:6px;border-radius:50%;background:#22c55e;display:inline-block;margin-right:6px;animation:pdot 1.5s infinite}
+  @keyframes pdot{0%,100%{opacity:1}50%{opacity:0.3}}
+  .tf-row{display:flex;justify-content:center;gap:6px;margin-bottom:10px}
+  .tf-btn{background:rgba(15,23,42,0.6);border:1px solid rgba(255,255,255,0.08);padding:5px 14px;border-radius:8px;color:#64748b;font-weight:700;font-size:0.68rem;cursor:pointer;transition:0.2s}
+  .tf-btn.active{color:#a855f7;border-color:#a855f7;background:rgba(168,85,247,0.08)}
+  .acc-bar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+  .acc-card{flex:1;min-width:75px;background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:9px;text-align:center}
+  .acc-card h4{font-size:0.5rem;text-transform:uppercase;color:#64748b;margin-bottom:4px}
+  .acc-num{font-size:1.2rem;font-weight:800;font-family:monospace}
+  @keyframes pred-pulse{0%,100%{opacity:1}50%{opacity:0.35}}
   
   .asset-switcher{display:flex;justify-content:center;gap:6px;margin-bottom:20px;flex-wrap:wrap}
   .asset-btn{background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.1);padding:8px 14px;border-radius:10px;color:#64748b;font-weight:700;font-size:0.75rem;cursor:pointer;transition:0.2s}
@@ -211,7 +231,9 @@ async def root():
   .card h3{font-size:0.55rem;text-transform:uppercase;color:#64748b;margin-bottom:4px}
   .price{font-size:1rem;font-weight:800;font-family:monospace}
   
-  .btn-predict{width:100%;padding:14px;border-radius:12px;border:none;background:linear-gradient(90deg,#6366f1,#a855f7);color:white;font-weight:800;cursor:pointer;margin-bottom:20px;box-shadow:0 4px 15px rgba(99,102,241,0.3)}
+  .btn-predict{width:100%;padding:14px;border-radius:12px;border:none;background:linear-gradient(90deg,#6366f1,#a855f7);color:white;font-weight:800;cursor:pointer;margin-bottom:10px;box-shadow:0 4px 15px rgba(99,102,241,0.3);font-size:0.82rem;transition:0.2s}
+  .btn-predict:disabled{opacity:0.6;cursor:not-allowed}
+  .btn-csv{display:block;text-align:center;padding:9px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);border-radius:9px;color:#22c55e;font-size:0.72rem;font-weight:700;text-decoration:none;margin-bottom:14px}
   
   .table-card{background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:15px;overflow-x:auto}
   table{width:100%;border-collapse:collapse;font-size:0.75rem}
@@ -224,8 +246,8 @@ async def root():
 </head>
 <body>
 <div class="header">
-  <h1>🤖 Carl AI Cloud Trader</h1>
-  <div class="status-pill"><span class="dot"></span> Global Multi-Asset Predictions Live</div>
+  <h1>&#129302; Carl AI Cloud Trader</h1>
+  <div class="status-pill"><span class="dot"></span> <span id="status-txt">5s Pre-Close Sync &bull; 7 Assets &bull; Live</span></div>
 </div>
 
 <div class="asset-switcher">
@@ -238,15 +260,29 @@ async def root():
   <button class="asset-btn" onclick="switchAsset('JPY-USDT')" style="color:#22c55e">🇯🇵 JPY</button>
 </div>
 
+<div class="tf-row">
+  <button class="tf-btn active" onclick="switchTF('1min')">&#9889; 1M</button>
+  <button class="tf-btn" onclick="switchTF('3min')">3M</button>
+  <button class="tf-btn" onclick="switchTF('5min')">5M</button>
+  <button class="tf-btn" onclick="switchTF('15min')">15M</button>
+</div>
+
+<div class="acc-bar">
+  <div class="acc-card"><h4>Total</h4><div class="acc-num" id="stat-total" style="color:#a5b4fc">--</div></div>
+  <div class="acc-card"><h4>&#9989; Wins</h4><div class="acc-num" id="stat-wins" style="color:#22c55e">--</div></div>
+  <div class="acc-card"><h4>&#10060; Loss</h4><div class="acc-num" id="stat-losses" style="color:#ef4444">--</div></div>
+  <div class="acc-card"><h4>&#127919; Accuracy</h4><div class="acc-num" id="stat-pct" style="color:#a855f7">--%</div></div>
+</div>
 <div class="chart-container">
   <div style="display:flex;justify-content:space-between;margin-bottom:10px">
-    <h3 style="font-size:0.7rem;color:#64748b" id="chart-title">📊 LIVE 3M CHART: BTC/USDT</h3>
+    <h3 style="font-size:0.7rem;color:#64748b" id="chart-title">&#128202; LIVE 1M CHART: BTC/USDT</h3>
     <span style="font-size:0.65rem;color:#475569" id="last-update">--:--:--</span>
   </div>
   <div id="chart-svg-box" style="width:100%;height:300px"></div>
 </div>
 
-<button class="btn-predict" onclick="triggerPredict()">✨ FORCE AI CLOUD PREDICTION FOR <span id="btn-sym">BTC-USDT</span></button>
+<button class="btn-predict" onclick="triggerPredict()">&#10024; FORCE AI CLOUD PREDICTION FOR <span id="btn-sym">BTC-USDT</span></button>
+<a href="/download-csv" class="btn-csv">&#128202; Download Training CSV (Kaggle / 90% Accuracy)</a>
 
 <div class="grid" id="live-cards">
   <div class="card"><h3>BTC</h3><div class="price" id="p-BTC-USDT">--</div></div>
@@ -271,6 +307,7 @@ async def root():
 
 <script>
 let activeSymbol = 'BTC-USDT';
+let activeTF = '1min';
 const SYMBOLS = ['BTC-USDT','ETH-USDT','SOL-USDT','EUR-USDT','GBP-USDT','AUD-USDT','JPY-USDT'];
 
 function switchAsset(sym) {
@@ -278,8 +315,18 @@ function switchAsset(sym) {
   document.querySelectorAll('.asset-btn').forEach(b => {
     b.classList.toggle('active', b.textContent.includes(sym.split('-')[0]));
   });
-  document.getElementById('chart-title').innerText = `📊 LIVE 3M CHART: ${sym} (KuCoin)`;
+  document.getElementById('chart-title').innerText = '\u{1F4CA} LIVE ' + activeTF.toUpperCase() + ' CHART: ' + sym;
   document.getElementById('btn-sym').innerText = sym;
+  loadData();
+}
+
+function switchTF(tf) {
+  activeTF = tf;
+  document.querySelectorAll('.tf-btn').forEach(b => {
+    const label = tf.replace('min','M');
+    b.classList.toggle('active', b.textContent.trim().includes(label) || b.textContent.trim() === label);
+  });
+  document.getElementById('chart-title').innerText = '\u{1F4CA} LIVE ' + tf.toUpperCase() + ' CHART: ' + activeSymbol;
   loadData();
 }
 
@@ -287,13 +334,26 @@ async function loadData() {
   try {
     document.getElementById('last-update').textContent = 'Live \u2022 ' + new Date().toLocaleTimeString();
     
-    // 1. Fetch the latest in-memory prediction (always works, no Supabase needed)
+    // 1. Fetch latest in-memory prediction
     const pr = await fetch(`/api/last-prediction/${activeSymbol}`);
     const pd = await pr.json();
     const latestPred = pd.predicted_dir ? pd : null;
+    if(document.getElementById('status-txt') && latestPred) {
+      document.getElementById('status-txt').textContent = 'AI: ' + latestPred.predicted_dir + ' \u2022 ' + new Date(latestPred.timestamp).toLocaleTimeString();
+    }
     
-    // 2. Chart Data + dotted prediction overlay
-    const cr = await fetch(`/api/market-data/${activeSymbol}`);
+    // 2. Load accuracy stats from CSV
+    try {
+      const ar = await fetch('/accuracy-stats');
+      const ad = await ar.json();
+      document.getElementById('stat-total').textContent = ad.total || '--';
+      document.getElementById('stat-wins').textContent = ad.wins || '--';
+      document.getElementById('stat-losses').textContent = ad.losses || '--';
+      document.getElementById('stat-pct').textContent = (ad.win_rate ? ad.win_rate.toFixed(1) : '--') + '%';
+    } catch(ae) {}
+    
+    // 2. Chart with active timeframe
+    const cr = await fetch(`/api/market-data/${activeSymbol}?tf=${activeTF}`);
     const cd = await cr.json();
     renderChart(cd, latestPred);
 
