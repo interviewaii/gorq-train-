@@ -141,8 +141,11 @@ class PredictRequest(BaseModel):
     math_dir: str = ""  # Direction computed from React math (RSI/EMA/DMI) — sent by the chart
 
 
-# Lock to ensure only one prediction runs at a time (prevents GPU crashes/interference)
+# Lock to ensure only one prediction runs at a time
 inference_lock = threading.Lock()
+
+# In-memory cache: last prediction per symbol (survives Supabase outage)
+LAST_PREDICTIONS = {}
 
 @app.get("/api/market-data/{symbol}")
 async def get_market_data(symbol: str):
@@ -162,11 +165,22 @@ async def get_market_data(symbol: str):
 class ManualPredictReq(BaseModel):
     symbol: str
 
+@app.get("/api/last-prediction/{symbol}")
+async def get_last_prediction(symbol: str):
+    """Returns the most recent in-memory prediction for a symbol."""
+    pred = LAST_PREDICTIONS.get(symbol)
+    if pred:
+        return pred
+    return {"symbol": symbol, "predicted_dir": None}
+
 @app.post("/api/manual-predict")
 async def manual_predict(req: ManualPredictReq):
-    """Triggers a manual prediction cycle."""
+    """Triggers a manual prediction cycle and returns immediately."""
+    SYMBOL_DISPLAY = {"BTC-USDT": "BTC/USDT", "ETH-USDT": "ETH/USDT", "SOL-USDT": "SOL/USDT",
+                      "EUR-USDT": "EUR/USDT", "GBP-USDT": "GBP/USDT", "AUD-USDT": "AUD/USDT", "JPY-USDT": "JPY/USDT"}
     print(f"🚀 Manual prediction triggered for {req.symbol}")
-    return {"status": "success", "message": f"Triggered for {req.symbol}"}
+    threading.Thread(target=run_prediction_cycle, args=(req.symbol, SYMBOL_DISPLAY), daemon=True).start()
+    return {"status": "running", "message": f"Prediction started for {req.symbol}. Refresh in 5s."}
 
 @app.get("/")
 async def root():
@@ -271,93 +285,109 @@ function switchAsset(sym) {
 
 async function loadData() {
   try {
-    document.getElementById('last-update').textContent = 'Live • ' + new Date().toLocaleTimeString();
+    document.getElementById('last-update').textContent = 'Live \u2022 ' + new Date().toLocaleTimeString();
     
-    // 1. Prediction History (Get latest for chart)
-    const hr = await fetch(`/api/recent-predictions?symbol=${activeSymbol}`);
-    const hd = await hr.json();
-    const latestPred = (hd.predictions && hd.predictions.length > 0) ? hd.predictions[0] : null;
-    const tbody = document.getElementById('table-body');
+    // 1. Fetch the latest in-memory prediction (always works, no Supabase needed)
+    const pr = await fetch(`/api/last-prediction/${activeSymbol}`);
+    const pd = await pr.json();
+    const latestPred = pd.predicted_dir ? pd : null;
     
-    if (!hd.predictions || hd.predictions.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:30px;color:#475569">Waiting for next candle close (5s sync)...</td></tr>';
-    } else {
-      tbody.innerHTML = hd.predictions.map(p => {
-        const cls = p.predicted_dir === 'UP' ? 'badge-up' : 'badge-down';
-        const res = p.correct === 'TRUE' ? '✅ WIN' : p.correct === 'FALSE' ? '❌ LOSS' : '⏳ Wait';
-        // Extract accuracy/prob from ai_reply if hidden
-        const accMatch = (p.ai_reply || "").match(/ACCURACY: ([\d%]+)/i);
-        const probMatch = (p.ai_reply || "").match(/PROBABILITY: ([\w% ,]+)/i);
-        const acc = accMatch ? accMatch[1] : '--';
-        const prob = probMatch ? probMatch[1].split(',')[0].replace('Bullish','B:').replace('Bearish','S:') : '--';
-        
-        return `<tr><td>${new Date(p.timestamp).toLocaleTimeString()}</td><td><b>${p.symbol}</b></td><td><span class="badge ${cls}">${p.predicted_dir}</span></td><td>${acc}</td><td>${prob}</td><td>${res}</td></tr>`;
-      }).join('');
-    }
-
-    // 2. Chart Data
+    // 2. Chart Data + dotted prediction overlay
     const cr = await fetch(`/api/market-data/${activeSymbol}`);
     const cd = await cr.json();
     renderChart(cd, latestPred);
 
-    // 3. Update Prices for all
-    for(const s of SYMBOLS) {
-      const resp = await fetch(`/api/market-data/${s}`);
-      const d = await resp.json();
-      if(d && d.length > 0) {
-        const p = d[d.length-1].close;
-        const prec = s.includes('EUR') || s.includes('GBP') || s.includes('AUD') ? 4 : s.includes('JPY') ? 3 : 2;
-        const el = document.getElementById(`p-${s}`);
-        if(el) el.textContent = p.toFixed(prec);
+    // 3. Prediction History from Supabase (best-effort, not blocking)
+    try {
+      const hr = await fetch(`/api/recent-predictions?symbol=${activeSymbol}`);
+      const hd = await hr.json();
+      const tbody = document.getElementById('table-body');
+      if (!hd.predictions || hd.predictions.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:#475569">\u23f3 No predictions yet \u2013 AI syncs 5s before each candle close</td></tr>';
+      } else {
+        tbody.innerHTML = hd.predictions.map(p => {
+          const cls = p.predicted_dir === 'UP' ? 'badge-up' : 'badge-down';
+          const res = p.correct === 'TRUE' ? '\u2705 WIN' : p.correct === 'FALSE' ? '\u274c LOSS' : '\u23f3 Wait';
+          const accMatch = (p.ai_reply || '').match(/ACCURACY:\s*([\d%]+)/i);
+          const probMatch = (p.ai_reply || '').match(/PROBABILITY:\s*([\w%\s,]+)/i);
+          const acc = accMatch ? accMatch[1] : '--';
+          const prob = probMatch ? probMatch[1].split(',')[0].replace('Bullish','B:').trim() : '--';
+          return `<tr><td>${new Date(p.timestamp).toLocaleTimeString()}</td><td><b>${p.symbol}</b></td><td><span class="badge ${cls}">${p.predicted_dir}</span></td><td>${acc}</td><td>${prob}</td><td>${res}</td></tr>`;
+        }).join('');
       }
+    } catch(he) { console.warn('History fetch error:', he); }
+
+    // 4. Update live price cards for all assets
+    for(const s of SYMBOLS) {
+      try {
+        const resp = await fetch(`/api/market-data/${s}`);
+        const d = await resp.json();
+        if(d && d.length > 0) {
+          const p = d[d.length-1].close;
+          const prec = s.includes('EUR') || s.includes('GBP') || s.includes('AUD') ? 4 : s.includes('JPY') ? 3 : 2;
+          const el = document.getElementById(`p-${s}`);
+          if(el) el.textContent = p.toFixed(prec);
+        }
+      } catch(pe) {}
     }
-  } catch(e) { console.error(e); }
+  } catch(e) { console.error('loadData error:', e); }
 }
 
 function renderChart(data, latestPred) {
-  if(!data || data.length === 0) return;
   const box = document.getElementById('chart-svg-box');
-  const W = box.clientWidth, H = 300;
+  if(!data || data.length === 0) {
+    box.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:300px;color:#475569;font-size:0.75rem">\u23f3 Loading chart data...</div>';
+    return;
+  }
+  const W = box.clientWidth || 800, H = 300;
   
-  // Calculate scales
   let prices = data.map(d => [d.low, d.high]).flat();
   const lastPrice = data[data.length-1].close;
-  
-  // If we have a prediction, add its estimated levels to the scale
   if(latestPred) {
-      const pDir = latestPred.predicted_dir === 'UP' ? 1 : -1;
-      const buffer = (Math.max(...prices) - Math.min(...prices)) * 0.1;
-      prices.push(lastPrice + (buffer * pDir));
+    const buffer = (Math.max(...prices) - Math.min(...prices)) * 0.15;
+    prices.push(lastPrice + buffer, lastPrice - buffer);
   }
-  
   const minP = Math.min(...prices), maxP = Math.max(...prices);
   const range = (maxP - minP) || 0.0001;
   const toY = (p) => H - 20 - ((p - minP) / range) * (H - 40);
-  const bw = (W / (data.length + 2)) - 2;
+  const bw = Math.max(4, (W / (data.length + 3)) - 2);
   
-  let html = `<svg width="${W}" height="${H}">`;
+  let html = `<svg width="${W}" height="${H}" style="display:block">`;
   
-  // 1. Draw Real Candles
+  // Grid lines
+  for(let i=0; i<4; i++) {
+    const y = 20 + i * ((H-40)/3);
+    html += `<line x1="0" y1="${y}" x2="${W}" y2="${y}" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>`;
+  }
+  
+  // Real candles
   data.forEach((d, i) => {
     const isUp = d.close >= d.open;
     const color = isUp ? '#22c55e' : '#ef4444';
-    const x = i * (bw + 2);
-    html += `<line x1="${x+bw/2}" y1="${toY(d.high)}" x2="${x+bw/2}" y2="${toY(d.low)}" stroke="${color}" stroke-width="1" opacity="0.6"/>`;
-    html += `<rect x="${x}" y="${Math.min(toY(d.open), toY(d.close))}" width="${bw}" height="${Math.max(1, Math.abs(toY(d.open)-toY(d.close)))}" fill="${color}" rx="1"/>`;
+    const x = i * (bw + 2) + 1;
+    html += `<line x1="${x+bw/2}" y1="${toY(d.high)}" x2="${x+bw/2}" y2="${toY(d.low)}" stroke="${color}" stroke-width="1" opacity="0.7"/>`;
+    html += `<rect x="${x}" y="${Math.min(toY(d.open), toY(d.close))}" width="${bw}" height="${Math.max(1.5, Math.abs(toY(d.open)-toY(d.close)))}" fill="${color}" rx="1" opacity="0.9"/>`;
   });
   
-  // 2. Draw Prediction (Dotted)
-  if(latestPred) {
-      const isUp = latestPred.predicted_dir === 'UP';
-      const color = isUp ? '#22c55e' : '#ef4444';
-      const x = data.length * (bw + 2);
-      const startY = toY(lastPrice);
-      const endY = isUp ? startY - 20 : startY + 20;
-      
-      // Prediction Box (Dotted)
-      html += `<rect x="${x}" y="${Math.min(startY, endY)}" width="${bw}" height="${Math.abs(startY - endY)}" fill="none" stroke="${color}" stroke-width="2" stroke-dasharray="3,2" rx="2" />`;
-      // Prediction Label
-      html += `<text x="${x}" y="${Math.min(startY, endY)-5}" fill="${color}" font-size="8" font-weight="bold">AI ${latestPred.predicted_dir}</text>`;
+  // AI Prediction Dotted Candle
+  if(latestPred && latestPred.predicted_dir) {
+    const isUp = latestPred.predicted_dir === 'UP';
+    const color = isUp ? '#22c55e' : '#ef4444';
+    const x = data.length * (bw + 2) + 4;
+    const candleH = Math.max(20, (H - 40) * 0.08);
+    const startY = toY(lastPrice);
+    const endY = isUp ? startY - candleH : startY + candleH;
+    const top = Math.min(startY, endY);
+    
+    // Glow background
+    html += `<rect x="${x-2}" y="${top-8}" width="${bw+4}" height="${candleH+16}" fill="${color}" opacity="0.05" rx="4"/>`;
+    // Dotted wicks
+    html += `<line x1="${x+bw/2}" y1="${top-10}" x2="${x+bw/2}" y2="${top}" stroke="${color}" stroke-width="1.5" stroke-dasharray="2,2" opacity="0.8"/>`;
+    html += `<line x1="${x+bw/2}" y1="${top+candleH}" x2="${x+bw/2}" y2="${top+candleH+10}" stroke="${color}" stroke-width="1.5" stroke-dasharray="2,2" opacity="0.8"/>`;
+    // Dotted body
+    html += `<rect x="${x}" y="${top}" width="${bw}" height="${candleH}" fill="none" stroke="${color}" stroke-width="2" stroke-dasharray="4,3" rx="2"/>`;
+    // AI label
+    html += `<text x="${x+bw/2}" y="${top-14}" fill="${color}" font-size="9" font-weight="bold" text-anchor="middle">AI ${latestPred.predicted_dir}</text>`;
   }
   
   html += `</svg>`;
@@ -365,8 +395,26 @@ function renderChart(data, latestPred) {
 }
 
 async function triggerPredict() {
-  alert("Triggered! Checking " + activeSymbol + ". Refresh in 10s.");
-  await fetch('/api/manual-predict', { method: 'POST', body: JSON.stringify({symbol: activeSymbol}), headers:{'Content-Type':'application/json'} });
+  const btn = document.querySelector('.btn-predict');
+  btn.textContent = '\u23f3 AI Analysing...';
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/manual-predict', {
+      method: 'POST',
+      body: JSON.stringify({symbol: activeSymbol}),
+      headers: {'Content-Type': 'application/json'}
+    });
+    const data = await res.json();
+    btn.textContent = '\u2705 Done! Refreshing...';
+    setTimeout(() => {
+      loadData();
+      btn.textContent = '\u2728 FORCE AI CLOUD PREDICTION FOR ' + activeSymbol;
+      btn.disabled = false;
+    }, 8000);
+  } catch(e) {
+    btn.textContent = '\u2728 FORCE AI CLOUD PREDICTION FOR ' + activeSymbol;
+    btn.disabled = false;
+  }
 }
 
 loadData();
@@ -838,10 +886,19 @@ PROBABILITY: Bullish X%, Bearish Y%"""
         )
         reply = chat_completion.choices[0].message.content.strip()
         
-        # Log Result
+        # Log Result to Supabase + CSV
         with csv_lock:
             log_prediction_data(prompt, reply, math_dir=math_dir)
-        print(f"✅ Prediction completed for {symbol}")
+
+        # Store in memory so chart dotted candle always shows (Supabase-independent)
+        pred_dir = "UP" if "DIRECTION: UP" in reply.upper() else "DOWN"
+        LAST_PREDICTIONS[symbol] = {
+            "symbol": symbol,
+            "predicted_dir": pred_dir,
+            "timestamp": datetime.now().isoformat(),
+            "ai_reply": reply
+        }
+        print(f"✅ Prediction completed for {symbol}: {pred_dir}")
 
     except Exception as e:
         print(f"❌ Error in prediction cycle for {symbol}: {e}")
