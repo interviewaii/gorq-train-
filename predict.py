@@ -154,7 +154,149 @@ inference_lock = threading.Lock()
 
 @app.get("/")
 async def root():
-    return {"message": "Carl AI Prediction Server is Running 🚀", "status": "online"}
+    from fastapi.responses import HTMLResponse
+    html = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Carl AI - Live Trading Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#0a0e1a;color:#f1f5f9;font-family:'Inter',sans-serif;min-height:100vh;padding:20px}
+  .header{text-align:center;padding:30px 20px;border-bottom:1px solid rgba(255,255,255,0.08);margin-bottom:30px}
+  .header h1{font-size:2rem;font-weight:800;background:linear-gradient(90deg,#6366f1,#a855f7);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+  .header p{color:#64748b;margin-top:8px;font-size:0.9rem}
+  .status-bar{display:flex;gap:16px;justify-content:center;flex-wrap:wrap;margin-bottom:30px}
+  .status-pill{background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.3);border-radius:999px;padding:6px 16px;font-size:0.8rem;color:#a5b4fc;display:flex;align-items:center;gap:6px}
+  .dot{width:7px;height:7px;border-radius:50%;background:#22c55e;animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;margin-bottom:30px}
+  .card{background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:20px;backdrop-filter:blur(10px)}
+  .card h3{font-size:0.7rem;text-transform:uppercase;letter-spacing:0.1em;color:#64748b;margin-bottom:12px}
+  .symbol-name{font-size:1.4rem;font-weight:800;letter-spacing:-0.02em}
+  .price{font-size:1.1rem;font-family:monospace;color:#94a3b8;margin:4px 0}
+  .direction{font-size:1.1rem;font-weight:700;padding:6px 14px;border-radius:8px;display:inline-block;margin-top:8px}
+  .up{background:rgba(34,197,94,0.15);color:#22c55e;border:1px solid rgba(34,197,94,0.3)}
+  .down{background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3)}
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:30px}
+  .stat{background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:16px;text-align:center}
+  .stat .val{font-size:1.8rem;font-weight:800}
+  .stat .lbl{font-size:0.7rem;color:#64748b;margin-top:4px;text-transform:uppercase;letter-spacing:0.05em}
+  .table-card{background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:20px;overflow:hidden}
+  table{width:100%;border-collapse:collapse;font-size:0.82rem}
+  th{color:#64748b;font-weight:600;text-align:left;padding:8px 12px;border-bottom:1px solid rgba(255,255,255,0.06);font-size:0.7rem;text-transform:uppercase}
+  td{padding:10px 12px;border-bottom:1px solid rgba(255,255,255,0.04)}
+  tr:hover td{background:rgba(255,255,255,0.02)}
+  .badge{padding:2px 8px;border-radius:6px;font-size:0.72rem;font-weight:700}
+  .badge-up{background:rgba(34,197,94,0.15);color:#22c55e}
+  .badge-down{background:rgba(239,68,68,0.15);color:#ef4444}
+  .badge-correct{background:rgba(34,197,94,0.15);color:#22c55e}
+  .badge-wrong{background:rgba(239,68,68,0.15);color:#ef4444}
+  .badge-pending{background:rgba(100,116,139,0.15);color:#64748b}
+  .refresh{text-align:center;margin-top:20px;color:#475569;font-size:0.75rem}
+  #countdown{color:#6366f1;font-weight:700}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>🤖 Carl AI Trading Dashboard</h1>
+  <p>Autonomous 24/7 Cloud Trader — BTC · ETH · SOL</p>
+</div>
+
+<div class="status-bar">
+  <div class="status-pill"><span class="dot"></span> Server Online</div>
+  <div class="status-pill"><span class="dot"></span> Groq AI Connected</div>
+  <div class="status-pill"><span class="dot"></span> Supabase Live</div>
+  <div class="status-pill"><span class="dot"></span> Auto-Trading Every 3 Minutes</div>
+</div>
+
+<div class="stats" id="stats">
+  <div class="stat"><div class="val" style="color:#6366f1">--</div><div class="lbl">Total Predictions</div></div>
+  <div class="stat"><div class="val" style="color:#22c55e">--%</div><div class="lbl">Win Rate</div></div>
+  <div class="stat"><div class="val" style="color:#a855f7">--</div><div class="lbl">Labeled Rows</div></div>
+</div>
+
+<div class="grid" id="live-cards">
+  <div class="card"><h3>BTC/USDT</h3><div class="symbol-name" style="color:#f59e0b">₿ Bitcoin</div><p class="price">Fetching...</p></div>
+  <div class="card"><h3>ETH/USDT</h3><div class="symbol-name" style="color:#6366f1">Ξ Ethereum</div><p class="price">Fetching...</p></div>
+  <div class="card"><h3>SOL/USDT</h3><div class="symbol-name" style="color:#a855f7">◎ Solana</div><p class="price">Fetching...</p></div>
+</div>
+
+<div class="table-card">
+  <h3 style="font-size:0.8rem;color:#94a3b8;margin-bottom:16px;font-weight:700">📊 Recent Predictions (Live from Supabase)</h3>
+  <table>
+    <thead><tr><th>Time</th><th>Symbol</th><th>Predicted</th><th>Actual</th><th>Result</th></tr></thead>
+    <tbody id="table-body"><tr><td colspan="5" style="text-align:center;color:#64748b;padding:30px">Loading predictions...</td></tr></tbody>
+  </table>
+</div>
+
+<div class="refresh">Auto-refreshing in <span id="countdown">30</span>s · <a href="/" style="color:#6366f1;text-decoration:none">Refresh Now</a></div>
+
+<script>
+const API = window.location.origin;
+let countdown = 30;
+
+async function loadPredictions() {
+  try {
+    const r = await fetch(API + '/api/recent-predictions');
+    const data = await r.json();
+    const tbody = document.getElementById('table-body');
+    if (!data.predictions || data.predictions.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#64748b;padding:30px">No predictions yet. AI is collecting data...</td></tr>';
+      return;
+    }
+    // Stats
+    const total = data.total || data.predictions.length;
+    const wins = data.predictions.filter(p => p.correct === 'TRUE').length;
+    const labeled = data.predictions.filter(p => p.correct).length;
+    const wr = labeled > 0 ? Math.round(wins/labeled*100) : '--';
+    const statsEl = document.getElementById('stats').children;
+    statsEl[0].children[0].textContent = total;
+    statsEl[1].children[0].textContent = wr + (wr !== '--' ? '%' : '');
+    statsEl[2].children[0].textContent = labeled;
+
+    tbody.innerHTML = data.predictions.map(p => {
+      const t = new Date(p.timestamp).toLocaleString();
+      const dirClass = p.predicted_dir === 'UP' ? 'badge-up' : 'badge-down';
+      const actClass = p.actual_dir === 'UP' ? 'badge-up' : p.actual_dir === 'DOWN' ? 'badge-down' : 'badge-pending';
+      const resClass = p.correct === 'TRUE' ? 'badge-correct' : p.correct === 'FALSE' ? 'badge-wrong' : 'badge-pending';
+      const res = p.correct === 'TRUE' ? '✅ WIN' : p.correct === 'FALSE' ? '❌ LOSS' : '⏳ Pending';
+      return \`<tr><td style="color:#475569;\${p.correct?'':''}">\${t}</td><td style="font-weight:700">\${p.symbol}</td><td><span class="badge \${dirClass}">\${p.predicted_dir || '--'}</span></td><td><span class="badge \${actClass}">\${p.actual_dir || '--'}</span></td><td><span class="badge \${resClass}">\${res}</span></td></tr>\`;
+    }).join('');
+  } catch(e) {
+    document.getElementById('table-body').innerHTML = '<tr><td colspan="5" style="text-align:center;color:#ef4444;padding:16px">Error loading data from API</td></tr>';
+  }
+}
+
+async function loadPrices() {
+  const symbols = ['BTCUSDT','ETHUSDT','SOLUSDT'];
+  const names = ['₿ Bitcoin','Ξ Ethereum','◎ Solana'];
+  const colors = ['#f59e0b','#6366f1','#a855f7'];
+  const labels = ['BTC/USDT','ETH/USDT','SOL/USDT'];
+  const cards = document.getElementById('live-cards').children;
+  for (let i = 0; i < symbols.length; i++) {
+    try {
+      const r = await fetch(\`https://api.binance.com/api/v3/ticker/price?symbol=\${symbols[i]}\`);
+      const d = await r.json();
+      const p = parseFloat(d.price).toLocaleString('en-US',{style:'currency',currency:'USD',minimumFractionDigits:2});
+      cards[i].innerHTML = \`<h3>\${labels[i]}</h3><div class="symbol-name" style="color:\${colors[i]}">\${names[i]}</div><p class="price">\${p}</p><p style="font-size:0.7rem;color:#475569;margin-top:4px">Live from Binance</p>\`;
+    } catch(e) {}
+  }
+}
+
+loadPredictions();
+loadPrices();
+setInterval(() => {
+  countdown--;
+  document.getElementById('countdown').textContent = countdown;
+  if (countdown <= 0) { countdown = 30; loadPredictions(); loadPrices(); }
+}, 1000);
+</script>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
 
 @app.get("/ping")
 async def ping_server():
@@ -359,6 +501,23 @@ async def get_accuracy_stats():
     except Exception as e:
         print(f"❌ Error in accuracy-stats: {e}")
         return {"wins": 0, "losses": 0, "win_rate": 0, "total": 0}
+
+
+@app.get("/api/recent-predictions")
+async def get_recent_predictions():
+    """Returns the last 50 predictions from Supabase for the dashboard UI."""
+    try:
+        if supabase is None:
+            return {"predictions": [], "total": 0}
+        res = supabase.table("predictions").select("*").order("timestamp", desc=True).limit(50).execute()
+        count_res = supabase.table("predictions").select("id", count="exact").execute()
+        return {
+            "predictions": res.data or [],
+            "total": count_res.count or len(res.data or [])
+        }
+    except Exception as e:
+        print(f"❌ Error in recent-predictions: {e}")
+        return {"predictions": [], "total": 0}
 
 
 def auto_label_outcomes():
