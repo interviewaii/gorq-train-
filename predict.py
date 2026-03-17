@@ -271,18 +271,22 @@ async function loadPredictions() {
 }
 
 async function loadPrices() {
-  const symbols = ['BTCUSDT','ETHUSDT','SOLUSDT'];
+  const coins = ['bitcoin','ethereum','solana'];
   const names = ['₿ Bitcoin','Ξ Ethereum','◎ Solana'];
   const colors = ['#f59e0b','#6366f1','#a855f7'];
   const labels = ['BTC/USDT','ETH/USDT','SOL/USDT'];
   const cards = document.getElementById('live-cards').children;
-  for (let i = 0; i < symbols.length; i++) {
-    try {
-      const r = await fetch(\`https://api.binance.com/api/v3/ticker/price?symbol=\${symbols[i]}\`);
-      const d = await r.json();
-      const p = parseFloat(d.price).toLocaleString('en-US',{style:'currency',currency:'USD',minimumFractionDigits:2});
-      cards[i].innerHTML = \`<h3>\${labels[i]}</h3><div class="symbol-name" style="color:\${colors[i]}">\${names[i]}</div><p class="price">\${p}</p><p style="font-size:0.7rem;color:#475569;margin-top:4px">Live from Binance</p>\`;
-    } catch(e) {}
+  try {
+    const r = await fetch(\`https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd\`);
+    const d = await r.json();
+    for (let i = 0; i < coins.length; i++) {
+      const price = d[coins[i]]?.usd;
+      if (!price) continue;
+      const p = parseFloat(price).toLocaleString('en-US',{style:'currency',currency:'USD',minimumFractionDigits:2});
+      cards[i].innerHTML = \`<h3>\${labels[i]}</h3><div class="symbol-name" style="color:\${colors[i]}">\${names[i]}</div><p class="price">\${p}</p><p style="font-size:0.7rem;color:#475569;margin-top:4px">Live from CoinGecko</p>\`;
+    }
+  } catch(e) {
+    console.log('Price fetch error:', e);
   }
 }
 
