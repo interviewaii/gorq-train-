@@ -466,8 +466,11 @@ function renderChart(data, latestPred) {
     // Glow
     html += `<rect x="${x2-2}" y="${top2-6}" width="${bw+4}" height="${candleH2+12}" fill="${color}" opacity="0.04" rx="4"/>`;    // Dotted wicks
     html += `<line x1="${x2+bw/2}" y1="${top2-8}" x2="${x2+bw/2}" y2="${top2}" stroke="${color}" stroke-width="1.5" stroke-dasharray="2,2" opacity="0.7"/>`;    html += `<line x1="${x2+bw/2}" y1="${top2+candleH2}" x2="${x2+bw/2}" y2="${top2+candleH2+8}" stroke="${color}" stroke-width="1.5" stroke-dasharray="2,2" opacity="0.7"/>`;    // Dotted body
-    html += `<rect x="${x2}" y="${top2}" width="${bw}" height="${candleH2}" fill="none" stroke="${color}" stroke-width="2" stroke-dasharray="4,3" rx="2"/>`;    // AI label
-    html += `<text x="${x2+bw/2}" y="${top2-10}" fill="${color}" font-size="9" font-weight="bold" text-anchor="middle">AI ${latestPred.predicted_dir}</text>`;
+    html += `<rect x="${x2}" y="${top2}" width="${bw}" height="${candleH2}" fill="none" stroke="${color}" stroke-width="2" stroke-dasharray="4,3" rx="2"/>`;    // AI label with confidence
+    const conf = latestPred.confidence || '';
+    const adxVal = latestPred.adx ? ' ADX:' + latestPred.adx : '';
+    html += `<text x="${x2+bw/2}" y="${top2-10}" fill="${color}" font-size="8" font-weight="bold" text-anchor="middle">AI ${latestPred.predicted_dir} ${conf}%</text>`;
+    html += `<text x="${x2+bw/2}" y="${top2+candleH2+18}" fill="#64748b" font-size="6" text-anchor="middle">${adxVal}</text>`;
   }
   
   html += `</svg>`;
@@ -968,34 +971,61 @@ PROBABILITY: Bullish X%, Bearish Y%"""
 
         print(f"[Predict] {symbol} - Calling Groq AI...")
         if groq_client is None:
-            print(f"[Predict] ERROR: groq_client is None! GROQ_API_KEY may be missing.")
-            return
+            print(f"[Predict] ERROR: groq_client is None!")
+            # Math-only fallback
+            pred_dir = math_dir
+            reply = f"DIRECTION: {math_dir} | OPEN: {current['close']} | CLOSE: {current['close']} | STARS: 3 | ACCURACY: {int(50+abs(trend_score))}% | PROBABILITY: Bullish {50+int(trend_score)}%, Bearish {50-int(trend_score)}% | (Math-Only Fallback)"
+        else:
+            # Try primary model, fallback to smaller one on rate limit
+            reply = None
+            for model_name in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+                try:
+                    chat_completion = groq_client.chat.completions.create(
+                        messages=[
+                            {"role": "system", "content": "Professional Crypto/Forex Analyst. Decision-maker. Reply EXACTLY: DIRECTION: UP or DOWN, OPEN: price, CLOSE: price, STARS: 1-5, ACCURACY: X%, PROBABILITY: Bullish X%, Bearish Y%"},
+                            {"role": "user", "content": prompt}
+                        ],
+                        model=model_name,
+                        temperature=0.3,
+                        max_tokens=200,
+                    )
+                    reply = chat_completion.choices[0].message.content.strip()
+                    print(f"[Predict] {symbol} - {model_name} replied: {reply[:80]}...")
+                    break
+                except Exception as model_err:
+                    print(f"[Predict] {model_name} failed: {str(model_err)[:100]}")
+                    continue
+            
+            if not reply:
+                # All models failed - use math-only fallback
+                print(f"[Predict] All models failed for {symbol}, using math fallback")
+                pred_dir = math_dir
+                conf = min(95, int(50 + abs(trend_score)))
+                reply = f"DIRECTION: {math_dir} | OPEN: {current['close']} | CLOSE: {current['close']} | STARS: 3 | ACCURACY: {conf}% | PROBABILITY: Bullish {50+int(trend_score)}%, Bearish {50-int(trend_score)}% | (Math Fallback - ADX:{adx})"
         
-        chat_completion = groq_client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": "Professional Crypto/Forex Analyst. Decision-maker. Format: exact keys."},
-                {"role": "user", "content": prompt}
-            ],
-            model="llama-3.3-70b-versatile",
-            temperature=0.3,
-            max_tokens=250,
-        )
-        reply = chat_completion.choices[0].message.content.strip()
-        print(f"[Predict] {symbol} - Groq replied: {reply[:80]}...")
+        pred_dir = "UP" if "DIRECTION: UP" in reply.upper() else "DOWN"
         
         # Log Result to Supabase + CSV
         with csv_lock:
             log_prediction_data(prompt, reply, math_dir=math_dir)
 
-        # Store in memory so chart dotted candle always shows
-        pred_dir = "UP" if "DIRECTION: UP" in reply.upper() else "DOWN"
+        # Extract confidence from reply
+        import re as re2
+        acc_m = re2.search(r'ACCURACY:\s*([\d]+)', reply)
+        confidence = int(acc_m.group(1)) if acc_m else int(50 + abs(trend_score))
+
+        # Store in memory
         LAST_PREDICTIONS[symbol] = {
             "symbol": symbol,
             "predicted_dir": pred_dir,
             "timestamp": datetime.now().isoformat(),
-            "ai_reply": reply
+            "ai_reply": reply,
+            "confidence": confidence,
+            "adx": adx,
+            "rsi": rsi,
+            "trend_score": trend_score
         }
-        print(f"[Predict] {symbol} = {pred_dir} - STORED in LAST_PREDICTIONS")
+        print(f"[Predict] {symbol} = {pred_dir} (Conf:{confidence}%) - STORED")
         PRED_COUNTER["total"] += 1
 
     except Exception as e:
@@ -1026,9 +1056,9 @@ def auto_predict_loop():
             print(f"🕒 Waiting {int(wait)}s for next candle close (Sync @ 5s before)...")
             time.sleep(wait)
             
-            for symbol in SYMBOLS:
+            for symbol in SYMBOLS[:3]:  # Only BTC, ETH, SOL per cycle (save tokens)
                 run_prediction_cycle(symbol, SYMBOL_DISPLAY)
-                time.sleep(2) # Avoid rate limits
+                time.sleep(3)  # Rate limit spacing
                 
         except Exception as e:
             print(f"[Loop Error] {e}")
