@@ -969,39 +969,57 @@ STARS: [1-5]
 ACCURACY: [Expected %]
 PROBABILITY: Bullish X%, Bearish Y%"""
 
-        print(f"[Predict] {symbol} - Calling Groq AI...")
-        if groq_client is None:
-            print(f"[Predict] ERROR: groq_client is None!")
-            # Math-only fallback
-            pred_dir = math_dir
-            reply = f"DIRECTION: {math_dir} | OPEN: {current['close']} | CLOSE: {current['close']} | STARS: 3 | ACCURACY: {int(50+abs(trend_score))}% | PROBABILITY: Bullish {50+int(trend_score)}%, Bearish {50-int(trend_score)}% | (Math-Only Fallback)"
-        else:
-            # Try primary model, fallback to smaller one on rate limit
-            reply = None
-            for model_name in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
-                try:
-                    chat_completion = groq_client.chat.completions.create(
-                        messages=[
-                            {"role": "system", "content": "Professional Crypto/Forex Analyst. Decision-maker. Reply EXACTLY: DIRECTION: UP or DOWN, OPEN: price, CLOSE: price, STARS: 1-5, ACCURACY: X%, PROBABILITY: Bullish X%, Bearish Y%"},
-                            {"role": "user", "content": prompt}
-                        ],
-                        model=model_name,
-                        temperature=0.3,
-                        max_tokens=200,
-                    )
-                    reply = chat_completion.choices[0].message.content.strip()
-                    print(f"[Predict] {symbol} - {model_name} replied: {reply[:80]}...")
-                    break
-                except Exception as model_err:
-                    print(f"[Predict] {model_name} failed: {str(model_err)[:100]}")
-                    continue
-            
-            if not reply:
-                # All models failed - use math-only fallback
-                print(f"[Predict] All models failed for {symbol}, using math fallback")
-                pred_dir = math_dir
-                conf = min(95, int(50 + abs(trend_score)))
-                reply = f"DIRECTION: {math_dir} | OPEN: {current['close']} | CLOSE: {current['close']} | STARS: 3 | ACCURACY: {conf}% | PROBABILITY: Bullish {50+int(trend_score)}%, Bearish {50-int(trend_score)}% | (Math Fallback - ADX:{adx})"
+        print(f"[Predict] {symbol} - Starting AI cascade...")
+        sys_msg = "Professional Crypto/Forex Analyst. Decision-maker. Reply EXACTLY: DIRECTION: UP or DOWN, OPEN: price, CLOSE: price, STARS: 1-5, ACCURACY: X%, PROBABILITY: Bullish X%, Bearish Y%"
+        msgs = [{"role": "system", "content": sys_msg}, {"role": "user", "content": prompt}]
+        reply = None
+
+        # === LAYER 1: Groq llama-3.3-70b-versatile ===
+        if groq_client and not reply:
+            try:
+                r = groq_client.chat.completions.create(messages=msgs, model="llama-3.3-70b-versatile", temperature=0.3, max_tokens=200)
+                reply = r.choices[0].message.content.strip()
+                print(f"[Predict] {symbol} - Groq-70b OK: {reply[:80]}...")
+            except Exception as e1:
+                print(f"[Predict] Groq-70b failed: {str(e1)[:80]}")
+
+        # === LAYER 2: NVIDIA NIM llama-3.1-70b (FREE) ===
+        if not reply:
+            try:
+                import urllib.request as ur2
+                nvidia_key = os.environ.get("NVIDIA_API_KEY", "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")
+                nvidia_payload = json.dumps({
+                    "model": "meta/llama-3.1-70b-instruct",
+                    "messages": msgs,
+                    "temperature": 0.3,
+                    "max_tokens": 200
+                })
+                nvidia_req = ur2.Request(
+                    "https://integrate.api.nvidia.com/v1/chat/completions",
+                    data=nvidia_payload.encode("utf-8"),
+                    headers={"Authorization": f"Bearer {nvidia_key}", "Content-Type": "application/json"}
+                )
+                with ur2.urlopen(nvidia_req, timeout=20) as resp:
+                    nvidia_resp = json.loads(resp.read())
+                reply = nvidia_resp["choices"][0]["message"]["content"].strip()
+                print(f"[Predict] {symbol} - NVIDIA-NIM OK: {reply[:80]}...")
+            except Exception as e2:
+                print(f"[Predict] NVIDIA-NIM failed: {str(e2)[:80]}")
+
+        # === LAYER 3: Groq llama-3.1-8b-instant ===
+        if groq_client and not reply:
+            try:
+                r = groq_client.chat.completions.create(messages=msgs, model="llama-3.1-8b-instant", temperature=0.3, max_tokens=200)
+                reply = r.choices[0].message.content.strip()
+                print(f"[Predict] {symbol} - Groq-8b OK: {reply[:80]}...")
+            except Exception as e3:
+                print(f"[Predict] Groq-8b failed: {str(e3)[:80]}")
+
+        # === LAYER 4: Math-Only Fallback (ALWAYS works) ===
+        if not reply:
+            print(f"[Predict] All AI models failed for {symbol}, using math engine")
+            conf = min(95, int(50 + abs(trend_score)))
+            reply = f"DIRECTION: {math_dir} | OPEN: {current['close']} | CLOSE: {current['close']} | STARS: 3 | ACCURACY: {conf}% | PROBABILITY: Bullish {50+int(trend_score)}%, Bearish {50-int(trend_score)}% | (Math Engine - ADX:{adx})"
         
         pred_dir = "UP" if "DIRECTION: UP" in reply.upper() else "DOWN"
         
