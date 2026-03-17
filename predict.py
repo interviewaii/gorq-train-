@@ -180,99 +180,126 @@ async def root():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Carl AI - Live Trading Dashboard</title>
+<title>Carl AI - Multi-Asset Cloud Trader</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
-  body{background:#0a0e1a;color:#f1f5f9;font-family:'Inter',sans-serif;min-height:100vh;padding:20px}
-  .header{text-align:center;padding:20px;border-bottom:1px solid rgba(255,255,255,0.08);margin-bottom:20px}
-  .header h1{font-size:1.8rem;font-weight:800;background:linear-gradient(90deg,#6366f1,#a855f7);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-  .status-bar{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-bottom:20px}
-  .status-pill{background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.3);border-radius:999px;padding:6px 14px;font-size:0.75rem;color:#a5b4fc;display:flex;align-items:center;gap:6px}
-  .dot{width:7px;height:7px;border-radius:50%;background:#22c55e;animation:pulse 2s infinite}
-  @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
-  .chart-container{background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:15px;margin-bottom:20px;min-height:350px;position:relative}
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:15px;margin-bottom:20px}
-  .card{background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:15px;text-align:center}
-  .card h3{font-size:0.65rem;text-transform:uppercase;color:#64748b;margin-bottom:8px}
-  .symbol-name{font-size:1.2rem;font-weight:800}
-  .price{font-size:1rem;color:#94a3b8;margin:4px 0}
-  .btn-predict{width:100%;padding:14px;border-radius:10px;border:none;background:linear-gradient(90deg,#6366f1,#a855f7);color:white;font-weight:700;cursor:pointer;margin-bottom:20px;box-shadow:0 4px 15px rgba(99,102,241,0.3);transition:transform 0.2s}
-  .btn-predict:active{transform:scale(0.98)}
-  .table-card{background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:20px;overflow-x:auto}
-  table{width:100%;border-collapse:collapse;font-size:0.8rem}
-  th{color:#64748b;text-align:left;padding:10px;border-bottom:1px solid rgba(255,255,255,0.06);font-size:0.65rem;text-transform:uppercase}
-  td{padding:12px 10px;border-bottom:1px solid rgba(255,255,255,0.04)}
-  .badge{padding:2px 8px;border-radius:6px;font-size:0.7rem;font-weight:700}
+  body{background:#0a0e1a;color:#f1f5f9;font-family:'Inter',sans-serif;min-height:100vh;padding:15px}
+  .header{text-align:center;padding:15px;border-bottom:1px solid rgba(255,255,255,0.08);margin-bottom:15px}
+  .header h1{font-size:1.6rem;font-weight:800;background:linear-gradient(90deg,#6366f1,#a855f7);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+  .status-pill{background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.2);border-radius:999px;padding:5px 12px;font-size:0.7rem;color:#a5b4fc;margin:10px auto;display:table}
+  .dot{width:6px;height:6px;border-radius:50%;background:#22c55e;display:inline-block;margin-right:6px}
+  
+  .asset-switcher{display:flex;justify-content:center;gap:8px;margin-bottom:20px;flex-wrap:wrap}
+  .asset-btn{background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.1);padding:10px 18px;border-radius:12px;color:#64748b;font-weight:700;font-size:0.8rem;cursor:pointer;transition:0.2s}
+  .asset-btn.active{background:#6366f1;color:white;border-color:#6366f1;box-shadow:0 4px 12px rgba(99,102,241,0.4)}
+  .asset-btn:hover:not(.active){border-color:#6366f1;color:#a5b4fc}
+
+  .chart-container{background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:15px;margin-bottom:20px;min-height:350px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px}
+  .card{background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:12px;text-align:center}
+  .card h3{font-size:0.6rem;text-transform:uppercase;color:#64748b;margin-bottom:4px}
+  .price{font-size:1.1rem;font-weight:800;font-family:monospace}
+  
+  .btn-predict{width:100%;padding:14px;border-radius:12px;border:none;background:linear-gradient(90deg,#6366f1,#a855f7);color:white;font-weight:800;cursor:pointer;margin-bottom:20px;box-shadow:0 4px 15px rgba(99,102,241,0.3)}
+  
+  .table-card{background:rgba(15,23,42,0.8);border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:15px;overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:0.75rem}
+  th{color:#64748b;text-align:left;padding:8px;border-bottom:1px solid rgba(255,255,255,0.06);font-size:0.6rem;text-transform:uppercase}
+  td{padding:10px 8px;border-bottom:1px solid rgba(255,255,255,0.04)}
+  .badge{padding:2px 6px;border-radius:4px;font-size:0.65rem;font-weight:700}
   .badge-up{background:rgba(34,197,94,0.15);color:#22c55e}
   .badge-down{background:rgba(239,68,68,0.15);color:#ef4444}
 </style>
 </head>
 <body>
 <div class="header">
-  <h1>🤖 Carl AI Trading Cloud</h1>
-  <p style="color:#64748b;font-size:0.8rem">Autonomous 24/7 AI Trading Systems</p>
+  <h1>🤖 Carl AI Cloud Trader</h1>
+  <div class="status-pill"><span class="dot"></span> 24/7 Autonomous Predictions Active</div>
 </div>
 
-<div class="status-bar">
-  <div class="status-pill"><span class="dot"></span> Cloud Server: Active</div>
-  <div class="status-pill" id="update-pill">🕒 UI Last Update: <span id="last-update">--:--:--</span></div>
+<div class="asset-switcher">
+  <button class="asset-btn active" onclick="switchAsset('BTC-USDT')">₿ BTC</button>
+  <button class="asset-btn" onclick="switchAsset('ETH-USDT')">Ξ ETH</button>
+  <button class="asset-btn" onclick="switchAsset('SOL-USDT')">◎ SOL</button>
+  <button class="asset-btn" onclick="switchAsset('EUR-USDT')" style="border-color:rgba(34,197,94,0.4)">💶 EUR/USDT</button>
+  <button class="asset-btn" onclick="switchAsset('GBP-USDT')" style="border-color:rgba(34,197,94,0.4)">💷 GBP/USDT</button>
 </div>
 
-<div class="chart-container" id="chart-box">
-  <h3 style="font-size:0.7rem;color:#64748b;margin-bottom:10px">📊 LIVE 3M CHART: BTC/USDT (KuCoin)</h3>
+<div class="chart-container">
+  <div style="display:flex;justify-content:space-between;margin-bottom:10px">
+    <h3 style="font-size:0.7rem;color:#64748b" id="chart-title">📊 LIVE 3M CHART: BTC/USDT</h3>
+    <span style="font-size:0.65rem;color:#475569" id="last-update">--:--:--</span>
+  </div>
   <div id="chart-svg-box" style="width:100%;height:300px"></div>
 </div>
 
-<button class="btn-predict" onclick="triggerPredict()">✨ TRIGGER MANUAL CLOUD PREDICTION</button>
+<button class="btn-predict" onclick="triggerPredict()">✨ FORCE CLOUD PREDICTION FOR <span id="btn-sym">BTC-USDT</span></button>
 
 <div class="grid" id="live-cards">
-  <div class="card"><h3>BTC/USDT</h3><div class="symbol-name">₿ Bitcoin</div><p class="price" id="p-btc">Fetching...</p></div>
-  <div class="card"><h3>ETH/USDT</h3><div class="symbol-name">Ξ Ethereum</div><p class="price" id="p-eth">Fetching...</p></div>
-  <div class="card"><h3>SOL/USDT</h3><div class="symbol-name">◎ Solana</div><p class="price" id="p-sol">Fetching...</p></div>
+  <div class="card"><h3>BTC</h3><div class="price" id="p-BTC-USDT">--</div></div>
+  <div class="card"><h3>ETH</h3><div class="price" id="p-ETH-USDT">--</div></div>
+  <div class="card"><h3>SOL</h3><div class="price" id="p-SOL-USDT">--</div></div>
+  <div class="card"><h3>EUR</h3><div class="price" id="p-EUR-USDT" style="color:#22c55e">--</div></div>
+  <div class="card"><h3>GBP</h3><div class="price" id="p-GBP-USDT" style="color:#22c55e">--</div></div>
 </div>
 
 <div class="table-card">
-  <h3 style="font-size:0.7rem;color:#64748b;margin-bottom:15px">📋 CLOUD PREDICTION HISTORY (SUPABASE)</h3>
+  <h3 style="font-size:0.7rem;color:#64748b;margin-bottom:12px">📋 SYSTEM HISTORY (FILTERED BY <span id="hist-sym">BTC</span>)</h3>
   <table>
-    <thead><tr><th>Time</th><th>Symbol</th><th>AI Prediction</th><th>Result</th></tr></thead>
-    <tbody id="table-body"><tr><td colspan="4" style="text-align:center;padding:40px;color:#475569">Connecting to Supabase...</td></tr></tbody>
+    <thead><tr><th>Time</th><th>Symbol</th><th>AI View</th><th>Result</th></tr></thead>
+    <tbody id="table-body"></tbody>
   </table>
 </div>
 
 <script>
-let countdown = 30;
+let activeSymbol = 'BTC-USDT';
+const SYMBOLS = ['BTC-USDT','ETH-USDT','SOL-USDT','EUR-USDT','GBP-USDT'];
+
+function switchAsset(sym) {
+  activeSymbol = sym;
+  document.querySelectorAll('.asset-btn').forEach(b => {
+    b.classList.toggle('active', b.textContent.includes(sym.split('-')[0]));
+  });
+  document.getElementById('chart-title').innerText = `📊 LIVE 3M CHART: ${sym} (KuCoin)`;
+  document.getElementById('btn-sym').innerText = sym;
+  document.getElementById('hist-sym').innerText = sym.split('-')[0];
+  loadData();
+}
 
 async function loadData() {
   try {
-    // 1. Update Timestamp
-    document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
-
-    // 2. Load Prices
-    const pr = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd');
-    const pd = await pr.json();
-    if(pd.bitcoin) document.getElementById('p-btc').textContent = pd.bitcoin.usd.toLocaleString('en-US',{style:'currency',currency:'USD'});
-    if(pd.ethereum) document.getElementById('p-eth').textContent = pd.ethereum.usd.toLocaleString('en-US',{style:'currency',currency:'USD'});
-    if(pd.solana) document.getElementById('p-sol').textContent = pd.solana.usd.toLocaleString('en-US',{style:'currency',currency:'USD'});
-
-    // 3. Load Chart
-    const cr = await fetch('/api/market-data/BTC-USDT');
+    document.getElementById('last-update').textContent = 'Live • ' + new Date().toLocaleTimeString();
+    
+    // 1. Chart Data
+    const cr = await fetch(`/api/market-data/${activeSymbol}`);
     const cd = await cr.json();
     renderChart(cd);
 
-    // 4. Load History
-    const hr = await fetch('/api/recent-predictions');
+    // 2. Prediction History
+    const hr = await fetch(`/api/recent-predictions?symbol=${activeSymbol}`);
     const hd = await hr.json();
     const tbody = document.getElementById('table-body');
     if (!hd.predictions || hd.predictions.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:40px;color:#475569">No predictions yet. AI is working...</td></tr>';
-      return;
+      tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:30px;color:#475569">No cloud predictions for this asset yet.</td></tr>';
+    } else {
+      tbody.innerHTML = hd.predictions.map(p => {
+        const cls = p.predicted_dir === 'UP' ? 'badge-up' : 'badge-down';
+        const res = p.correct === 'TRUE' ? '✅ WIN' : p.correct === 'FALSE' ? '❌ LOSS' : '⏳ Wait';
+        return `<tr><td>${new Date(p.timestamp).toLocaleTimeString()}</td><td><b>${p.symbol}</b></td><td><span class="badge ${cls}">${p.predicted_dir}</span></td><td>${res}</td></tr>`;
+      }).join('');
     }
-    tbody.innerHTML = hd.predictions.map(p => {
-      const cls = p.predicted_dir === 'UP' ? 'badge-up' : 'badge-down';
-      const res = p.correct === 'TRUE' ? '✅ WIN' : p.correct === 'FALSE' ? '❌ LOSS' : '⏳ Waiting';
-      return `<tr><td>${new Date(p.timestamp).toLocaleTimeString()}</td><td><b>${p.symbol}</b></td><td><span class="badge ${cls}">${p.predicted_dir}</span></td><td>${res}</td></tr>`;
-    }).join('');
+
+    // 3. Update Prices for all
+    for(const s of SYMBOLS) {
+      const resp = await fetch(`/api/market-data/${s}`);
+      const d = await resp.json();
+      if(d && d.length > 0) {
+        const p = d[d.length-1].close;
+        const prec = s.includes('EUR') || s.includes('GBP') ? 4 : 2;
+        document.getElementById(`p-${s}`).textContent = p.toFixed(prec);
+      }
+    }
   } catch(e) { console.error(e); }
 }
 
@@ -280,8 +307,9 @@ function renderChart(data) {
   if(!data || data.length === 0) return;
   const box = document.getElementById('chart-svg-box');
   const W = box.clientWidth, H = 300;
-  const minP = Math.min(...data.map(d => d.low)), maxP = Math.max(...data.map(d => d.high));
-  const range = (maxP - minP) || 1;
+  const prices = data.map(d => [d.low, d.high]).flat();
+  const minP = Math.min(...prices), maxP = Math.max(...prices);
+  const range = (maxP - minP) || 0.0001;
   const toY = (p) => H - 20 - ((p - minP) / range) * (H - 40);
   const bw = (W / data.length) - 2;
   
@@ -290,17 +318,16 @@ function renderChart(data) {
     const isUp = d.close >= d.open;
     const color = isUp ? '#22c55e' : '#ef4444';
     const x = i * (bw + 2);
-    const yOpen = toY(d.open), yClose = toY(d.close), yHigh = toY(d.high), yLow = toY(d.low);
-    html += `<line x1="${x+bw/2}" y1="${yHigh}" x2="${x+bw/2}" y2="${yLow}" stroke="${color}" stroke-width="1"/>`;
-    html += `<rect x="${x}" y="${Math.min(yOpen, yClose)}" width="${bw}" height="${Math.max(2, Math.abs(yOpen-yClose))}" fill="${color}"/>`;
+    html += `<line x1="${x+bw/2}" y1="${toY(d.high)}" x2="${x+bw/2}" y2="${toY(d.low)}" stroke="${color}" stroke-width="1"/>`;
+    html += `<rect x="${x}" y="${Math.min(toY(d.open), toY(d.close))}" width="${bw}" height="${Math.max(1, Math.abs(toY(d.open)-toY(d.close)))}" fill="${color}"/>`;
   });
   html += `</svg>`;
   box.innerHTML = html;
 }
 
 async function triggerPredict() {
-  alert("Triggering AI Analysis... Wait 10 seconds and refresh.");
-  await fetch('/api/manual-predict', { method: 'POST', body: JSON.stringify({symbol:'BTC-USDT'}), headers:{'Content-Type':'application/json'} });
+  alert("Triggered! Checking " + activeSymbol + ". Refresh in 10s.");
+  await fetch('/api/manual-predict', { method: 'POST', body: JSON.stringify({symbol: activeSymbol}), headers:{'Content-Type':'application/json'} });
 }
 
 loadData();
@@ -516,12 +543,20 @@ async def get_accuracy_stats():
 
 
 @app.get("/api/recent-predictions")
-async def get_recent_predictions():
+async def get_recent_predictions(symbol: str = None):
     """Returns the last 50 predictions from Supabase for the dashboard UI."""
     try:
         if supabase is None:
             return {"predictions": [], "total": 0}
-        res = supabase.table("predictions").select("*").order("timestamp", desc=True).limit(50).execute()
+        
+        query = supabase.table("predictions").select("*").order("timestamp", desc=True).limit(50)
+        if symbol:
+            # Clean symbol (e.g. BTC/USDT -> BTC-USDT or BTCUSDT depending on storage)
+            # Our storage uses the KuCoin symbol or display name from log_prediction_data
+            # Let's handle both
+            query = query.or_(f"symbol.eq.{symbol},symbol.eq.{symbol.replace('-', '/')}")
+            
+        res = query.execute()
         count_res = supabase.table("predictions").select("id", count="exact").execute()
         return {
             "predictions": res.data or [],
@@ -658,8 +693,14 @@ def auto_predict_loop():
     import urllib.request
     import json
 
-    SYMBOLS = ["BTC-USDT", "ETH-USDT", "SOL-USDT"]  # KuCoin Symbols
-    SYMBOL_DISPLAY = {"BTC-USDT": "BTC/USDT", "ETH-USDT": "ETH/USDT", "SOL-USDT": "SOL/USDT"}
+    SYMBOLS = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "EUR-USDT", "GBP-USDT"]  # KuCoin Symbols
+    SYMBOL_DISPLAY = {
+        "BTC-USDT": "BTC/USDT", 
+        "ETH-USDT": "ETH/USDT", 
+        "SOL-USDT": "SOL/USDT",
+        "EUR-USDT": "EUR/USDT (Forex)",
+        "GBP-USDT": "GBP/USDT (Forex)"
+    }
     INTERVAL = "3m"
 
     def fetch_candles(symbol):
