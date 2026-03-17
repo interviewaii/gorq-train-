@@ -640,7 +640,15 @@ async def log_result(req: ResultRequest):
                         row["actual_open"] = str(req.actual_open)
                         row["actual_close"] = str(req.actual_close)
                         row["actual_dir"] = actual_dir
-                        row["correct"] = "TRUE" if str(row.get("predicted_dir", "")).strip().upper() == actual_dir else "FALSE"
+                        is_correct = str(row.get("predicted_dir", "")).strip().upper() == actual_dir
+                        row["correct"] = "TRUE" if is_correct else "FALSE"
+                        
+                        # Increment the in-memory counter
+                        if is_correct:
+                            PRED_COUNTER["wins"] += 1
+                        else:
+                            PRED_COUNTER["losses"] += 1
+                            
                         updated = True
                         break
 
