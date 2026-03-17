@@ -167,10 +167,14 @@ async def get_market_data(symbol: str):
     except Exception as e:
         return []
 
+class ManualPredictReq(BaseModel):
+    symbol: str
+
 @app.post("/api/manual-predict")
-async def manual_predict():
+async def manual_predict(req: ManualPredictReq):
     """Triggers a manual prediction cycle."""
-    return {"status": "success", "message": "Triggered."}
+    print(f"🚀 Manual prediction triggered for {req.symbol}")
+    return {"status": "success", "message": f"Triggered for {req.symbol}"}
 
 @app.get("/")
 async def root():
@@ -275,12 +279,11 @@ async function loadData() {
   try {
     document.getElementById('last-update').textContent = 'Live • ' + new Date().toLocaleTimeString();
     
-    const cr = await fetch(`/api/market-data/${activeSymbol}`);
-    const cd = await cr.json();
-    renderChart(cd);
-
+    // 1. Prediction History (Get latest for chart)
     const hr = await fetch(`/api/recent-predictions?symbol=${activeSymbol}`);
     const hd = await hr.json();
+    const latestPred = (hd.predictions && hd.predictions.length > 0) ? hd.predictions[0] : null;
+    
     const tbody = document.getElementById('table-body');
     if (!hd.predictions || hd.predictions.length === 0) {
       tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:30px;color:#475569">No cloud predictions for this asset yet.</td></tr>';
@@ -292,6 +295,12 @@ async function loadData() {
       }).join('');
     }
 
+    // 2. Chart Data
+    const cr = await fetch(`/api/market-data/${activeSymbol}`);
+    const cd = await cr.json();
+    renderChart(cd, latestPred);
+
+    // 3. Update Prices for all
     for(const s of SYMBOLS) {
       const resp = await fetch(`/api/market-data/${s}`);
       const d = await resp.json();
@@ -305,24 +314,52 @@ async function loadData() {
   } catch(e) { console.error(e); }
 }
 
-function renderChart(data) {
+function renderChart(data, latestPred) {
   if(!data || data.length === 0) return;
   const box = document.getElementById('chart-svg-box');
   const W = box.clientWidth, H = 300;
-  const prices = data.map(d => [d.low, d.high]).flat();
+  
+  // Calculate scales
+  let prices = data.map(d => [d.low, d.high]).flat();
+  const lastPrice = data[data.length-1].close;
+  
+  // If we have a prediction, add its estimated levels to the scale
+  if(latestPred) {
+      const pDir = latestPred.predicted_dir === 'UP' ? 1 : -1;
+      const buffer = (Math.max(...prices) - Math.min(...prices)) * 0.1;
+      prices.push(lastPrice + (buffer * pDir));
+  }
+  
   const minP = Math.min(...prices), maxP = Math.max(...prices);
   const range = (maxP - minP) || 0.0001;
   const toY = (p) => H - 20 - ((p - minP) / range) * (H - 40);
-  const bw = (W / data.length) - 2;
+  const bw = (W / (data.length + 2)) - 2;
   
   let html = `<svg width="${W}" height="${H}">`;
+  
+  // 1. Draw Real Candles
   data.forEach((d, i) => {
     const isUp = d.close >= d.open;
     const color = isUp ? '#22c55e' : '#ef4444';
     const x = i * (bw + 2);
-    html += `<line x1="${x+bw/2}" y1="${toY(d.high)}" x2="${x+bw/2}" y2="${toY(d.low)}" stroke="${color}" stroke-width="1"/>`;
-    html += `<rect x="${x}" y="${Math.min(toY(d.open), toY(d.close))}" width="${bw}" height="${Math.max(1, Math.abs(toY(d.open)-toY(d.close)))}" fill="${color}"/>`;
+    html += `<line x1="${x+bw/2}" y1="${toY(d.high)}" x2="${x+bw/2}" y2="${toY(d.low)}" stroke="${color}" stroke-width="1" opacity="0.6"/>`;
+    html += `<rect x="${x}" y="${Math.min(toY(d.open), toY(d.close))}" width="${bw}" height="${Math.max(1, Math.abs(toY(d.open)-toY(d.close)))}" fill="${color}" rx="1"/>`;
   });
+  
+  // 2. Draw Prediction (Dotted)
+  if(latestPred) {
+      const isUp = latestPred.predicted_dir === 'UP';
+      const color = isUp ? '#22c55e' : '#ef4444';
+      const x = data.length * (bw + 2);
+      const startY = toY(lastPrice);
+      const endY = isUp ? startY - 20 : startY + 20;
+      
+      // Prediction Box (Dotted)
+      html += `<rect x="${x}" y="${Math.min(startY, endY)}" width="${bw}" height="${Math.abs(startY - endY)}" fill="none" stroke="${color}" stroke-width="2" stroke-dasharray="3,2" rx="2" />`;
+      // Prediction Label
+      html += `<text x="${x}" y="${Math.min(startY, endY)-5}" fill="${color}" font-size="8" font-weight="bold">AI ${latestPred.predicted_dir}</text>`;
+  }
+  
   html += `</svg>`;
   box.innerHTML = html;
 }
@@ -333,7 +370,7 @@ async function triggerPredict() {
 }
 
 loadData();
-setInterval(loadData, 30000);
+setInterval(loadData, 5000);
 </script>
 </body>
 </html>"""
