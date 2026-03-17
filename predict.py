@@ -808,31 +808,33 @@ def auto_label_outcomes():
 
                 labeled = 0
                 for row in rows:
-                    sym = re.sub(r'[^A-Z0-9]', '', str(row.get("symbol", "")).upper())
-                    
-                    # If this row needs labeling and we have data for this symbol
-                    if not str(row.get("actual_dir", "")).strip():
-                        # Convert row symbol to KuCoin format
+                    if not str(row.get("actual_dir", "")).strip() and row.get("symbol", ""):
                         raw_sym = str(row.get("symbol", "")).strip()
                         kc_sym = raw_sym.replace('/', '-')
                         if not kc_sym.endswith('-USDT'):
                             kc_sym = re.sub(r'[^A-Z0-9]', '', raw_sym.upper())
                             kc_sym = kc_sym.replace('USDT', '-USDT')
                         
-                    if not str(row.get("actual_dir", "")).strip() and kc_sym in actuals_cache:
+                        if kc_sym not in actuals_cache:
+                            continue
+                        
                         try:
                             dt = datetime.fromisoformat(row["timestamp"])
-                            row_time_s = int(dt.timestamp())
-                            
-                            # Calculate the start time of the 3-minute candle
-                            interval_s = 3 * 60
-                            current_candle_start = (row_time_s // interval_s) * interval_s
-                            target_candle_start = current_candle_start + interval_s  # N+1
-                            
+                            pred_time_s = int(dt.timestamp())
                             kucoin_candles = actuals_cache[kc_sym]
                             
-                            if target_candle_start in kucoin_candles:
-                                a_open, a_close = kucoin_candles[target_candle_start]
+                            # Find the FIRST closed candle that started AFTER prediction
+                            # This is the N+1 candle the AI was predicting
+                            best_time = None
+                            best_candle = None
+                            for candle_start, (c_open, c_close) in kucoin_candles.items():
+                                if candle_start >= pred_time_s:
+                                    if best_time is None or candle_start < best_time:
+                                        best_time = candle_start
+                                        best_candle = (c_open, c_close)
+                            
+                            if best_candle:
+                                a_open, a_close = best_candle
                                 actual_dir = "UP" if a_close >= a_open else "DOWN"
                                 pred_dir = str(row.get("predicted_dir", "")).strip().upper()
                                 
@@ -842,19 +844,20 @@ def auto_label_outcomes():
                                 is_correct = pred_dir == actual_dir
                                 row["correct"] = "TRUE" if is_correct else "FALSE"
                                 labeled += 1
-                                # Update in-memory counter
                                 if is_correct:
                                     PRED_COUNTER["wins"] += 1
                                 else:
                                     PRED_COUNTER["losses"] += 1
+                                print(f"[AutoLabel] {raw_sym} pred={pred_dir} actual={actual_dir} -> {'WIN' if is_correct else 'LOSS'}")
                         except Exception as parse_error:
-                            print(f"[AutoLabel] Date parsing error: {parse_error}")
+                            print(f"[AutoLabel] Error: {parse_error}")
 
                 if labeled > 0:
                     with open(LOG_FILE, 'w', newline='') as f:
                         writer = csv.DictWriter(f, fieldnames=fieldnames)
                         writer.writeheader()
                         writer.writerows(rows)
+                    print(f"[AutoLabel] Labeled {labeled} row(s) in CSV")
                     print(f"✅ [AutoLabel] Labeled {labeled} row(s) in CSV")
 
         except Exception as e:
