@@ -5,3 +5,4 @@ numpy
 groq
 pydantic
 supabase
+scikit-learn

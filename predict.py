@@ -94,7 +94,7 @@ def log_prediction_data(prompt_text, ai_reply, predicted_open="N/A", predicted_c
             "stoch_d": find_val("Stoch D"),
             "willr": find_val("WillR"),
             "adx": find_val("ADX"),
-            "adx_pos": find_val("ADX\+"),
+            "adx_pos": find_val(r"ADX\+"),
             "adx_neg": find_val("ADX-"),
             "ema_8": find_val("EMA 8"),
             "ema_21": find_val("EMA 21"),
