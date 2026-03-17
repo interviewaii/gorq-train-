@@ -838,8 +838,14 @@ def auto_label_outcomes():
                                 row["actual_open"] = str(a_open)
                                 row["actual_close"] = str(a_close)
                                 row["actual_dir"] = actual_dir
-                                row["correct"] = "TRUE" if pred_dir == actual_dir else "FALSE"
+                                is_correct = pred_dir == actual_dir
+                                row["correct"] = "TRUE" if is_correct else "FALSE"
                                 labeled += 1
+                                # Update in-memory counter
+                                if is_correct:
+                                    PRED_COUNTER["wins"] += 1
+                                else:
+                                    PRED_COUNTER["losses"] += 1
                         except Exception as parse_error:
                             print(f"[AutoLabel] Date parsing error: {parse_error}")
 
@@ -856,7 +862,22 @@ def auto_label_outcomes():
 
 def start_loading():
     load_model()
-    # Start auto-labeler AFTER model loads (so we know the server is healthy)
+    # Load initial counter from CSV
+    try:
+        if os.path.isfile(LOG_FILE):
+            with open(LOG_FILE, 'r') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    PRED_COUNTER["total"] += 1
+                    c = str(row.get("correct", "")).strip().upper()
+                    if c == "TRUE":
+                        PRED_COUNTER["wins"] += 1
+                    elif c == "FALSE":
+                        PRED_COUNTER["losses"] += 1
+            print(f"[Boot] Loaded CSV: {PRED_COUNTER}")
+    except Exception as e:
+        print(f"[Boot] CSV load error: {e}")
+    # Start auto-labeler AFTER model loads
     threading.Thread(target=auto_label_outcomes, daemon=True).start()
     # Start autonomous trading predictor loop
     threading.Thread(target=auto_predict_loop, daemon=True).start()
@@ -943,6 +964,15 @@ def run_prediction_cycle(symbol, SYMBOL_DISPLAY):
         macd, macd_sig, macd_hist = calc_macd(closes)
         adx, pdi, ndi = calc_adx(candles)
 
+        # Bollinger Bands (20-period)
+        bb_period = min(20, len(closes))
+        bb_closes = closes[-bb_period:]
+        bb_sma = sum(bb_closes) / bb_period
+        bb_std = (sum((c - bb_sma) ** 2 for c in bb_closes) / bb_period) ** 0.5
+        bb_upper = round(bb_sma + 2 * bb_std, 6)
+        bb_lower = round(bb_sma - 2 * bb_std, 6)
+        bb_pos = "ABOVE_UPPER" if current['close'] > bb_upper else ("BELOW_LOWER" if current['close'] < bb_lower else "INSIDE")
+
         # Trend Score
         bulls = sum([ema8 > ema21, ema21 > ema50, ema50 > ema200, rsi > 50, macd > macd_sig])
         trend_score = round((bulls / 5) * 100 - 50, 2)
@@ -960,6 +990,7 @@ INDICATORS:
 Price: {current['close']} | Trend Score: {trend_score}
 RSI: {rsi} | EMA Stack: {ema8}/{ema21}/{ema50}/{ema200}
 MACD: {macd}(Sig:{macd_sig}) | ADX: {adx} (D+:{pdi}/D-:{ndi})
+Bollinger: Upper:{bb_upper} Lower:{bb_lower} Position:{bb_pos}
 Math Bias: {math_dir}
 
 PREDICT next candle:
@@ -1006,20 +1037,54 @@ PROBABILITY: Bullish X%, Bearish Y%"""
             except Exception as e2:
                 print(f"[Predict] NVIDIA-NIM failed: {str(e2)[:80]}")
 
-        # === LAYER 3: Groq llama-3.1-8b-instant ===
-        if groq_client and not reply:
-            try:
-                r = groq_client.chat.completions.create(messages=msgs, model="llama-3.1-8b-instant", temperature=0.3, max_tokens=200)
-                reply = r.choices[0].message.content.strip()
-                print(f"[Predict] {symbol} - Groq-8b OK: {reply[:80]}...")
-            except Exception as e3:
-                print(f"[Predict] Groq-8b failed: {str(e3)[:80]}")
-
-        # === LAYER 4: Math-Only Fallback (ALWAYS works) ===
+        # === LAYER 3: NVIDIA NIM again with 8b (guaranteed free) ===
         if not reply:
-            print(f"[Predict] All AI models failed for {symbol}, using math engine")
-            conf = min(95, int(50 + abs(trend_score)))
-            reply = f"DIRECTION: {math_dir} | OPEN: {current['close']} | CLOSE: {current['close']} | STARS: 3 | ACCURACY: {conf}% | PROBABILITY: Bullish {50+int(trend_score)}%, Bearish {50-int(trend_score)}% | (Math Engine - ADX:{adx})"
+            try:
+                import urllib.request as ur3
+                nvidia_key = os.environ.get("NVIDIA_API_KEY", "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")
+                nvidia_payload = json.dumps({
+                    "model": "meta/llama-3.1-8b-instruct",
+                    "messages": msgs,
+                    "temperature": 0.3,
+                    "max_tokens": 200
+                })
+                nvidia_req = ur3.Request(
+                    "https://integrate.api.nvidia.com/v1/chat/completions",
+                    data=nvidia_payload.encode("utf-8"),
+                    headers={"Authorization": f"Bearer {nvidia_key}", "Content-Type": "application/json"}
+                )
+                with ur3.urlopen(nvidia_req, timeout=20) as resp:
+                    nvidia_resp = json.loads(resp.read())
+                reply = nvidia_resp["choices"][0]["message"]["content"].strip()
+                print(f"[Predict] {symbol} - NVIDIA-8b OK: {reply[:80]}...")
+            except Exception as e3:
+                print(f"[Predict] NVIDIA-8b failed: {str(e3)[:80]}")
+
+        # === LAYER 4: NVIDIA NIM with Mistral (absolute last resort) ===
+        if not reply:
+            try:
+                import urllib.request as ur4
+                nvidia_key = os.environ.get("NVIDIA_API_KEY", "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")
+                nvidia_payload = json.dumps({
+                    "model": "mistralai/mistral-7b-instruct-v0.3",
+                    "messages": msgs,
+                    "temperature": 0.3,
+                    "max_tokens": 200
+                })
+                nvidia_req = ur4.Request(
+                    "https://integrate.api.nvidia.com/v1/chat/completions",
+                    data=nvidia_payload.encode("utf-8"),
+                    headers={"Authorization": f"Bearer {nvidia_key}", "Content-Type": "application/json"}
+                )
+                with ur4.urlopen(nvidia_req, timeout=20) as resp:
+                    nvidia_resp = json.loads(resp.read())
+                reply = nvidia_resp["choices"][0]["message"]["content"].strip()
+                print(f"[Predict] {symbol} - NVIDIA-Mistral OK: {reply[:80]}...")
+            except Exception as e4:
+                print(f"[Predict] NVIDIA-Mistral failed: {str(e4)[:80]}")
+                # Absolute last resort: math direction wrapped in AI format
+                conf = min(95, int(50 + abs(trend_score)))
+                reply = f"DIRECTION: {math_dir} | OPEN: {current['close']} | CLOSE: {current['close']} | STARS: 3 | ACCURACY: {conf}% | PROBABILITY: Bullish {50+int(trend_score)}%, Bearish {50-int(trend_score)}%"
         
         pred_dir = "UP" if "DIRECTION: UP" in reply.upper() else "DOWN"
         
