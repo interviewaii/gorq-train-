@@ -346,10 +346,10 @@ async function loadData() {
     try {
       const ar = await fetch('/accuracy-stats');
       const ad = await ar.json();
-      document.getElementById('stat-total').textContent = ad.total || '--';
-      document.getElementById('stat-wins').textContent = ad.wins || '--';
-      document.getElementById('stat-losses').textContent = ad.losses || '--';
-      document.getElementById('stat-pct').textContent = (ad.win_rate ? ad.win_rate.toFixed(1) : '--') + '%';
+      document.getElementById('stat-total').textContent = ad.total || 0;
+      document.getElementById('stat-wins').textContent = ad.wins || 0;
+      document.getElementById('stat-losses').textContent = ad.losses || 0;
+      document.getElementById('stat-pct').textContent = (ad.win_rate ? ad.win_rate.toFixed(1) : '0') + '%';
     } catch(ae) {}
     
     // 2. Chart with active timeframe
@@ -933,9 +933,12 @@ STARS: [1-5]
 ACCURACY: [Expected %]
 PROBABILITY: Bullish X%, Bearish Y%"""
 
-        from groq import Groq
-        client = Groq(api_key=os.environ.get("GROQ_API_KEY", ""))
-        chat_completion = client.chat.completions.create(
+        print(f"[Predict] {symbol} - Calling Groq AI...")
+        if groq_client is None:
+            print(f"[Predict] ERROR: groq_client is None! GROQ_API_KEY may be missing.")
+            return
+        
+        chat_completion = groq_client.chat.completions.create(
             messages=[
                 {"role": "system", "content": "Professional Crypto/Forex Analyst. Decision-maker. Format: exact keys."},
                 {"role": "user", "content": prompt}
@@ -945,12 +948,13 @@ PROBABILITY: Bullish X%, Bearish Y%"""
             max_tokens=250,
         )
         reply = chat_completion.choices[0].message.content.strip()
+        print(f"[Predict] {symbol} - Groq replied: {reply[:80]}...")
         
         # Log Result to Supabase + CSV
         with csv_lock:
             log_prediction_data(prompt, reply, math_dir=math_dir)
 
-        # Store in memory so chart dotted candle always shows (Supabase-independent)
+        # Store in memory so chart dotted candle always shows
         pred_dir = "UP" if "DIRECTION: UP" in reply.upper() else "DOWN"
         LAST_PREDICTIONS[symbol] = {
             "symbol": symbol,
@@ -958,7 +962,7 @@ PROBABILITY: Bullish X%, Bearish Y%"""
             "timestamp": datetime.now().isoformat(),
             "ai_reply": reply
         }
-        print(f"✅ Prediction completed for {symbol}: {pred_dir}")
+        print(f"[Predict] {symbol} = {pred_dir} - STORED in LAST_PREDICTIONS")
 
     except Exception as e:
         print(f"❌ Error in prediction cycle for {symbol}: {e}")
