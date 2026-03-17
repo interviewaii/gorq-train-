@@ -878,6 +878,24 @@ def start_loading():
             print(f"[Boot] Loaded CSV: {PRED_COUNTER}")
     except Exception as e:
         print(f"[Boot] CSV load error: {e}")
+    
+    # Validate CSV has correct columns (new 25+ format)
+    try:
+        if os.path.isfile(LOG_FILE):
+            with open(LOG_FILE, 'r') as f:
+                reader = csv.DictReader(f)
+                headers = reader.fieldnames or []
+            if "fib_236" not in headers or "bb_upper" not in headers:
+                # Old format CSV - back it up and start fresh
+                backup = LOG_FILE.replace(".csv", "_old.csv")
+                os.rename(LOG_FILE, backup)
+                print(f"[Boot] Old CSV backed up to {backup}, starting fresh with 25+ columns")
+                PRED_COUNTER["total"] = 0
+                PRED_COUNTER["wins"] = 0
+                PRED_COUNTER["losses"] = 0
+    except Exception as e:
+        print(f"[Boot] CSV validation error: {e}")
+    
     # Start auto-labeler AFTER model loads
     threading.Thread(target=auto_label_outcomes, daemon=True).start()
     # Start autonomous trading predictor loop
@@ -1012,7 +1030,8 @@ MACD: {macd}(Sig:{macd_sig}) | ADX: {adx} (D+:{pdi}/D-:{ndi})
 Bollinger: Upper:{bb_upper} Lower:{bb_lower} Position:{bb_pos}
 Fibonacci: 23.6%={fib_236} 38.2%={fib_382} 50%={fib_500} 61.8%={fib_618}
 Volume: {volume} | Candle Body: {candle_body_pct}%
-Math Bias: {math_dir}
+
+Analyze ALL indicators carefully. If bearish signals dominate, predict DOWN. Do NOT default to UP.
 
 PREDICT next candle:
 DIRECTION: UP or DOWN
@@ -1154,28 +1173,26 @@ async def manual_predict(req: ManualPredictReq):
 
 def auto_predict_loop():
     import time
-    SYMBOLS = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "EUR-USDT", "GBP-USDT", "AUD-USDT", "JPY-USDT"]
     SYMBOL_DISPLAY = {"BTC-USDT": "BTC/USDT", "ETH-USDT": "ETH/USDT", "SOL-USDT": "SOL/USDT", "EUR-USDT": "EUR/USDT", "GBP-USDT": "GBP/USDT", "AUD-USDT": "AUD/USDT", "JPY-USDT": "JPY/USDT"}
     
-    print("🤖 [AutoPredict] Autonomous Cloud Trader Syncing with 3m Candles...")
+    print("[AutoPredict] BTC-USDT only mode for clean CSV training")
     while True:
         try:
             now = time.time()
-            # Wait until 5 seconds before the next 3-minute mark
             next_3m = (int(now // 180) + 1) * 180
             wait = (next_3m - 5) - now
             if wait <= 0: wait += 180
             
-            print(f"🕒 Waiting {int(wait)}s for next candle close (Sync @ 5s before)...")
+            print(f"[AutoPredict] Waiting {int(wait)}s for next BTC candle close...")
             time.sleep(wait)
             
-            for symbol in SYMBOLS[:3]:  # Only BTC, ETH, SOL per cycle (save tokens)
-                run_prediction_cycle(symbol, SYMBOL_DISPLAY)
-                time.sleep(3)  # Rate limit spacing
+            # Only BTC-USDT for clean CSV
+            run_prediction_cycle("BTC-USDT", SYMBOL_DISPLAY)
                 
         except Exception as e:
             print(f"[Loop Error] {e}")
             time.sleep(10)
+
 
 
 
